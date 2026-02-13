@@ -1,0 +1,10 @@
+Endpoint
+-point to the folder, uvicorn <file name w/o py>:app
+- after ctrl  http://127.0.0.1:8000, add /docs to test the endpoints
+
+Frontend
+- before running frontend, split the terminal into 2
+-run the backend first
+-to run frontend, point to root, streamlit run file_name.py
+
+In the frontend code, make sure the port in URL is the same w fastapi

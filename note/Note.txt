@@ -1,0 +1,10 @@
+.ctrl / to make the code become comment
+.to point the terminal to the folder, type cd [folder_name]
+.gitignore is used to exclude them from Github repo. 
+eg, API key. 
+.to point to the root folder, cd ..
+
+- simple analogy
+if = "check something"
+try = "be careful, this might crash"
+while = "keep doing this over and over"

@@ -1,0 +1,10 @@
+. to push to github repo, use this code. 
+need to point to root. cd..
+
+git add .
+git commit -m "your_comment"
+git push
+
+instead of pushing the libraries/venv, we push
+the keys to them. to update those keys:
+- pip freeze > requirements.txt

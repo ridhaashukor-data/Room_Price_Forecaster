@@ -1,0 +1,9 @@
+-	To setup venv, at the root, run python -m venv venv 
+last one is the name of venv folder.
+-	To activate, 
+venv\Scripts\activate   
+
+-	While setting up new venv, if there is authorization error, 
+run this code under root first. 
+
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
