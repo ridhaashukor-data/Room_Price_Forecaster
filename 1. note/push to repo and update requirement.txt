@@ -7,4 +7,4 @@ git push
 
 instead of pushing the libraries/venv, we push
 the keys to them. to update those keys:
-- pip freeze > requirements.txt
+pip freeze > requirements.txt
