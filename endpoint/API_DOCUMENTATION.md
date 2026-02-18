@@ -161,7 +161,87 @@ Detailed health status.
   "status": "healthy",
   "timestamp": "2026-02-16T10:30:00",
   "completion_ratios_loaded": true,
+  "mongodb_connected": true,
   "service": "Hotel Occupancy Forecasting API"
+}
+```
+
+---
+
+### 7. **Bulk Output History**
+
+**GET** `/bulk/history?limit=20`
+
+List previously generated bulk outputs stored in MongoDB.
+
+**Retention policy:** bulk outputs are auto-pruned on every new upload to keep only the latest 5 records.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "id": "67b70f8f7a8b0e5a1b2c3d4e",
+      "created_at": "2026-02-20T10:24:11.123456",
+      "input_filename": "occupancy_template_filled.xlsx",
+      "output_filename": "forecast_output_20260220_102411.xlsx",
+      "size_bytes": 84231
+    }
+  ]
+}
+```
+
+---
+
+### 8. **Download Past Bulk Output**
+
+**GET** `/bulk/download/{record_id}`
+
+Download one previously generated bulk output file by history record ID.
+
+**Response:** Excel file download
+
+---
+
+### 9. **Delete One Bulk History Record**
+
+**DELETE** `/bulk/history/{record_id}`
+
+Delete a single stored bulk history item (including file bytes) by record ID.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Bulk history record deleted",
+  "data": {
+    "deleted_count": 1
+  }
+}
+```
+
+---
+
+### 10. **Delete Old Bulk History Records**
+
+**DELETE** `/bulk/history?older_than_days=30&limit=500`
+
+Delete old bulk history records in batches to control storage growth.
+
+- `older_than_days`: minimum age in days (default: `30`)
+- `limit`: max records deleted in one call (default: `500`, max: `5000`)
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Old bulk history records deleted",
+  "data": {
+    "deleted_count": 42,
+    "older_than_days": 30,
+    "applied_limit": 500
+  }
 }
 ```
 

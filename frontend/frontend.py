@@ -8,39 +8,17 @@ Interactive UI for:
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
-import io
+from datetime import datetime, timedelta, timezone
 import os
-import sys
-import tempfile
-import importlib
+import requests
+from pathlib import Path
+from dotenv import load_dotenv
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+load_dotenv(dotenv_path=Path(PROJECT_ROOT) / ".env")
 
-for path in (PROJECT_ROOT, BACKEND_DIR):
-    if path not in sys.path:
-        sys.path.insert(0, path)
-
-try:
-    from backend.forecaster import (
-        forecast_and_price,
-        load_completion_ratios,
-        get_input_options
-    )
-    from backend.bulk_processor import (
-        generate_template,
-        process_bulk_forecast
-    )
-except ModuleNotFoundError:
-    forecaster_module = importlib.import_module("forecaster")
-    bulk_processor_module = importlib.import_module("bulk_processor")
-
-    forecast_and_price = forecaster_module.forecast_and_price
-    load_completion_ratios = forecaster_module.load_completion_ratios
-    get_input_options = forecaster_module.get_input_options
-    generate_template = bulk_processor_module.generate_template
-    process_bulk_forecast = bulk_processor_module.process_bulk_forecast
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
+REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", "180"))
 
 # ============================================================================
 # CONFIGURATION
@@ -60,94 +38,51 @@ def format_date_to_ddmmyy(date_obj):
     """Convert datetime to DDMMYY format"""
     return date_obj.strftime('%d%m%y')
 
-@st.cache_resource
-def get_completion_ratios_df():
-    """Load completion ratios once per Streamlit session."""
-    return load_completion_ratios()
-
-
-class LocalResponse:
-    """Minimal response object to keep existing UI logic unchanged."""
-    def __init__(self, status_code=200, data=None, content=b""):
-        self.status_code = status_code
-        self._data = data if data is not None else {}
-        self.content = content
-
-    def json(self):
-        return self._data
-
+def format_history_timestamp(timestamp_str):
+    """Convert ISO timestamp string to readable date-time label."""
+    if not timestamp_str:
+        return "Unknown date/time"
+    try:
+        timestamp_text = str(timestamp_str).replace("Z", "+00:00")
+        parsed_dt = datetime.fromisoformat(timestamp_text)
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+        local_dt = parsed_dt.astimezone()
+        return local_dt.strftime("%d/%m/%Y %I:%M %p")
+    except Exception:
+        return str(timestamp_str)
 
 def run_backend(endpoint, method="GET", data=None, files=None):
-    """Run backend operations directly (no separate HTTP server required)."""
+    """Call FastAPI backend over HTTP."""
+    url = f"{API_BASE_URL}{endpoint}"
+
     try:
-        completion_ratios_df = get_completion_ratios_df()
+        if method == "GET":
+            response = requests.get(url, timeout=REQUEST_TIMEOUT)
+        elif method == "POST":
+            response = requests.post(url, json=data, files=files, timeout=REQUEST_TIMEOUT)
+        else:
+            st.error(f"❌ Unsupported operation: {method} {endpoint}")
+            return None
 
-        if endpoint == "/options" and method == "GET":
-            return LocalResponse(
-                status_code=200,
-                data={
-                    "status": "success",
-                    "data": get_input_options()
-                }
-            )
+        if response.status_code >= 400:
+            error_message = "Unknown API error"
+            try:
+                payload = response.json()
+                error_message = payload.get("detail") or payload.get("message") or str(payload)
+            except Exception:
+                error_message = response.text
+            st.error(f"❌ API Error ({response.status_code}): {error_message}")
+            return None
 
-        if endpoint == "/forecast" and method == "POST":
-            result = forecast_and_price(data, completion_ratios_df)
-            return LocalResponse(status_code=200, data=result)
-
-        if endpoint == "/bulk/template" and method == "GET":
-            temp_dir = tempfile.gettempdir()
-            template_path = generate_template(output_dir=temp_dir)
-            with open(template_path, "rb") as f:
-                template_bytes = f.read()
-            return LocalResponse(status_code=200, content=template_bytes)
-
-        if endpoint == "/bulk/upload" and method == "POST":
-            if not files or 'file' not in files:
-                st.error("❌ No file received.")
-                return None
-
-            filename, file_bytes, _ = files['file']
-            if not filename.lower().endswith(('.xlsx', '.xls')):
-                st.error("❌ Invalid file type. Please upload an Excel file (.xlsx or .xls)")
-                return None
-
-            temp_dir = tempfile.gettempdir()
-            input_path = os.path.join(temp_dir, f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
-
-            with open(input_path, 'wb') as f:
-                f.write(file_bytes)
-
-            output_path = process_bulk_forecast(
-                input_path,
-                output_dir=temp_dir,
-                completion_ratios_df=completion_ratios_df
-            )
-
-            with open(output_path, "rb") as f:
-                output_bytes = f.read()
-
-            return LocalResponse(status_code=200, content=output_bytes)
-
-        if endpoint == "/health" and method == "GET":
-            return LocalResponse(
-                status_code=200,
-                data={
-                    "status": "healthy",
-                    "timestamp": datetime.now().isoformat(),
-                    "completion_ratios_loaded": completion_ratios_df is not None,
-                    "service": "Hotel Occupancy Forecasting (Local Mode)"
-                }
-            )
-
-        st.error(f"❌ Unsupported operation: {method} {endpoint}")
-        return None
+        return response
 
     except ValueError as e:
         st.error(f"❌ Validation Error: {e}")
         return None
-    except FileNotFoundError as e:
-        st.error(f"❌ Missing file: {e}")
+    except requests.RequestException as e:
+        st.error(f"❌ Cannot reach API at {API_BASE_URL}. Details: {e}")
+        st.caption("Start the API first: venv\\Scripts\\python.exe endpoint\\endpoint.py")
         return None
     except Exception as e:
         st.error(f"❌ Error: {e}")
@@ -379,6 +314,61 @@ with tab1:
                     for warning in result['warnings']:
                         st.warning(warning)
 
+        st.markdown("---")
+        st.subheader("🕘 Single-Day History")
+
+        single_history_response = run_backend("/single/history")
+        if single_history_response and single_history_response.status_code == 200:
+            single_history_payload = single_history_response.json()
+            single_history_items = single_history_payload.get("data", [])
+            single_history_message = (single_history_payload.get("message") or "").strip()
+
+            if "mongodb is not connected" in single_history_message.lower():
+                st.warning("🟡 Single-day history unavailable: MongoDB is offline.")
+
+            if single_history_items:
+                def _format_single_history_item(item):
+                    return format_history_timestamp(item.get("created_at"))
+
+                selected_single_index = st.selectbox(
+                    "Select a previous single-day forecast",
+                    options=list(range(len(single_history_items))),
+                    format_func=lambda idx: _format_single_history_item(single_history_items[idx]),
+                    index=0,
+                    key="single_history_select"
+                )
+
+                selected_single_item = single_history_items[selected_single_index]
+                selected_single_id = selected_single_item.get("id")
+
+                if st.button("👁️ View Selected Single-Day Record", type="secondary", key="single_history_view_button"):
+                    st.session_state["single_history_view_id"] = selected_single_id
+
+                if st.session_state.get("single_history_view_id") == selected_single_id:
+                    single_detail_response = run_backend(f"/single/history/{selected_single_id}")
+                    if single_detail_response and single_detail_response.status_code == 200:
+                        single_detail = single_detail_response.json().get("data", {})
+                        single_input = single_detail.get("input") or {}
+                        single_output = single_detail.get("output") or {}
+
+                        st.caption(f"Saved at: {format_history_timestamp(single_detail.get('created_at'))}")
+
+                        st.markdown("**Saved Input (Table View)**")
+                        input_table_df = pd.DataFrame(
+                            [{"Field": key, "Value": value} for key, value in single_input.items()]
+                        )
+                        st.dataframe(input_table_df, use_container_width=True)
+
+                        st.markdown("**Saved Output (Table View)**")
+                        output_table_df = pd.DataFrame(
+                            [{"Field": key, "Value": value} for key, value in single_output.items()]
+                        )
+                        st.dataframe(output_table_df, use_container_width=True)
+            else:
+                st.info("No single-day history records found yet.")
+        else:
+            st.caption("Single-day history is unavailable right now. Check API and MongoDB connection.")
+
 # ============================================================================
 # TAB 2: BULK FORECAST
 # ============================================================================
@@ -446,6 +436,48 @@ with tab2:
                 - Color gradient: Green (50%) → Yellow (75%) → Red (100%+)
                 - Can reuse this file as template for next forecast
                 """)
+
+    st.markdown("---")
+    st.subheader("🕘 Step 3: Download Past Outputs")
+
+    history_response = run_backend("/bulk/history")
+    if history_response and history_response.status_code == 200:
+        history_payload = history_response.json()
+        history_items = history_payload.get("data", [])
+        history_message = (history_payload.get("message") or "").strip()
+
+        if "mongodb is not connected" in history_message.lower():
+            st.warning("🟡 History unavailable: MongoDB is offline.")
+
+        if history_items:
+            def _format_history_item(item):
+                return format_history_timestamp(item.get("created_at"))
+
+            selected_index = st.selectbox(
+                "Select a previous output",
+                options=list(range(len(history_items))),
+                format_func=lambda idx: _format_history_item(history_items[idx]),
+                index=0
+            )
+
+            selected_item = history_items[selected_index]
+            selected_id = selected_item.get("id")
+
+            if st.button("⬇️ Download Selected Past Output", type="secondary"):
+                download_response = run_backend(f"/bulk/download/{selected_id}")
+                if download_response and download_response.status_code == 200:
+                    output_name = selected_item.get("output_filename") or f"bulk_output_{selected_id}.xlsx"
+                    st.download_button(
+                        label="💾 Save Selected Output",
+                        data=download_response.content,
+                        file_name=output_name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    st.success("✅ Past output is ready. Click 'Save Selected Output'.")
+        else:
+            st.info("No past bulk outputs found in history yet.")
+    else:
+        st.caption("Past output history is unavailable right now. Check API and MongoDB connection.")
     
     # Instructions
     st.markdown("---")
@@ -459,7 +491,6 @@ with tab2:
            - Upload Date: Current date (DD/MM/YY format)
            - Current Occupancy: Fill ONLY the month columns (Jan, Feb, etc.)
            - Leave forecast columns empty - they will be filled automatically
-           - Bottom borders mark last valid day of each month (e.g., Feb ends at day 28)
         
         3. **Upload**: Upload the filled template
         
@@ -467,7 +498,6 @@ with tab2:
            - Current occupancy for each date (from your input)
            - Forecast occupancy for each date (calculated, up to 30 days)
            - Color gradient: Green (50%) → Yellow (75%) → Red (100%+)
-           - Month columns grouped with borders for easy tracking
         
         **Notes:**
         - Only forecasts up to 30 days from upload date
