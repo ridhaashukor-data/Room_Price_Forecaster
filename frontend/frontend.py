@@ -7,16 +7,44 @@ Interactive UI for:
 """
 
 import streamlit as st
-import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import io
+import os
+import sys
+import tempfile
+import importlib
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BACKEND_DIR = os.path.join(PROJECT_ROOT, "backend")
+
+for path in (PROJECT_ROOT, BACKEND_DIR):
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+try:
+    from backend.forecaster import (
+        forecast_and_price,
+        load_completion_ratios,
+        get_input_options
+    )
+    from backend.bulk_processor import (
+        generate_template,
+        process_bulk_forecast
+    )
+except ModuleNotFoundError:
+    forecaster_module = importlib.import_module("forecaster")
+    bulk_processor_module = importlib.import_module("bulk_processor")
+
+    forecast_and_price = forecaster_module.forecast_and_price
+    load_completion_ratios = forecaster_module.load_completion_ratios
+    get_input_options = forecaster_module.get_input_options
+    generate_template = bulk_processor_module.generate_template
+    process_bulk_forecast = bulk_processor_module.process_bulk_forecast
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-
-API_BASE_URL = "http://localhost:8000"
 
 st.set_page_config(
     page_title="Hotel Occupancy Forecaster",
@@ -32,28 +60,94 @@ def format_date_to_ddmmyy(date_obj):
     """Convert datetime to DDMMYY format"""
     return date_obj.strftime('%d%m%y')
 
-def call_api(endpoint, method="GET", data=None, files=None):
-    """Make API call to FastAPI backend"""
-    url = f"{API_BASE_URL}{endpoint}"
-    
+@st.cache_resource
+def get_completion_ratios_df():
+    """Load completion ratios once per Streamlit session."""
+    return load_completion_ratios()
+
+
+class LocalResponse:
+    """Minimal response object to keep existing UI logic unchanged."""
+    def __init__(self, status_code=200, data=None, content=b""):
+        self.status_code = status_code
+        self._data = data if data is not None else {}
+        self.content = content
+
+    def json(self):
+        return self._data
+
+
+def run_backend(endpoint, method="GET", data=None, files=None):
+    """Run backend operations directly (no separate HTTP server required)."""
     try:
-        if method == "GET":
-            response = requests.get(url)
-        elif method == "POST":
-            if files:
-                response = requests.post(url, files=files)
-            else:
-                response = requests.post(url, json=data)
-        
-        response.raise_for_status()
-        return response
-    
-    except requests.exceptions.ConnectionError:
-        st.error("❌ Cannot connect to API server. Please ensure the API is running on http://localhost:8000")
-        st.info("Start the API with: `venv\\Scripts\\python.exe endpoint\\endpoint.py`")
+        completion_ratios_df = get_completion_ratios_df()
+
+        if endpoint == "/options" and method == "GET":
+            return LocalResponse(
+                status_code=200,
+                data={
+                    "status": "success",
+                    "data": get_input_options()
+                }
+            )
+
+        if endpoint == "/forecast" and method == "POST":
+            result = forecast_and_price(data, completion_ratios_df)
+            return LocalResponse(status_code=200, data=result)
+
+        if endpoint == "/bulk/template" and method == "GET":
+            temp_dir = tempfile.gettempdir()
+            template_path = generate_template(output_dir=temp_dir)
+            with open(template_path, "rb") as f:
+                template_bytes = f.read()
+            return LocalResponse(status_code=200, content=template_bytes)
+
+        if endpoint == "/bulk/upload" and method == "POST":
+            if not files or 'file' not in files:
+                st.error("❌ No file received.")
+                return None
+
+            filename, file_bytes, _ = files['file']
+            if not filename.lower().endswith(('.xlsx', '.xls')):
+                st.error("❌ Invalid file type. Please upload an Excel file (.xlsx or .xls)")
+                return None
+
+            temp_dir = tempfile.gettempdir()
+            input_path = os.path.join(temp_dir, f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+
+            with open(input_path, 'wb') as f:
+                f.write(file_bytes)
+
+            output_path = process_bulk_forecast(
+                input_path,
+                output_dir=temp_dir,
+                completion_ratios_df=completion_ratios_df
+            )
+
+            with open(output_path, "rb") as f:
+                output_bytes = f.read()
+
+            return LocalResponse(status_code=200, content=output_bytes)
+
+        if endpoint == "/health" and method == "GET":
+            return LocalResponse(
+                status_code=200,
+                data={
+                    "status": "healthy",
+                    "timestamp": datetime.now().isoformat(),
+                    "completion_ratios_loaded": completion_ratios_df is not None,
+                    "service": "Hotel Occupancy Forecasting (Local Mode)"
+                }
+            )
+
+        st.error(f"❌ Unsupported operation: {method} {endpoint}")
         return None
-    except requests.exceptions.HTTPError as e:
-        st.error(f"❌ API Error: {e}")
+
+    except ValueError as e:
+        st.error(f"❌ Validation Error: {e}")
+        return None
+    except FileNotFoundError as e:
+        st.error(f"❌ Missing file: {e}")
         return None
     except Exception as e:
         st.error(f"❌ Error: {e}")
@@ -77,8 +171,8 @@ with tab1:
     st.header("Single-Day Occupancy Forecast")
     st.write("Get forecast and pricing recommendations for a specific date")
     
-    # Get input options from API
-    options_response = call_api("/options")
+    # Get input options from backend
+    options_response = run_backend("/options")
     
     if options_response and options_response.status_code == 200:
         options = options_response.json()['data']
@@ -186,9 +280,9 @@ with tab1:
                 "total_rooms_available": total_rooms
             }
             
-            # Call API
+            # Run backend
             with st.spinner("Generating forecast..."):
-                response = call_api("/forecast", method="POST", data=input_data)
+                response = run_backend("/forecast", method="POST", data=input_data)
             
             if response and response.status_code == 200:
                 result = response.json()
@@ -298,7 +392,7 @@ with tab2:
     st.write("Download the template with current + forecast columns. Fill only the current occupancy columns.")
     
     if st.button("⬇️ Download Template", type="secondary"):
-        response = call_api("/bulk/template")
+        response = run_backend("/bulk/template")
         
         if response and response.status_code == 200:
             st.download_button(
@@ -331,7 +425,7 @@ with tab2:
                             'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
                 }
                 
-                response = call_api("/bulk/upload", method="POST", files=files)
+                response = run_backend("/bulk/upload", method="POST", files=files)
             
             if response and response.status_code == 200:
                 st.success("✅ Bulk forecast generated successfully!")
@@ -400,20 +494,20 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # API Status check
-    st.subheader("🔌 API Status")
-    health_response = call_api("/health")
+    # Backend Status check
+    st.subheader("🔌 Backend Status")
+    health_response = run_backend("/health")
     
     if health_response and health_response.status_code == 200:
         health_data = health_response.json()
-        st.success("✅ API Connected")
+        st.success("✅ Backend Ready")
         st.caption(f"Last checked: {datetime.now().strftime('%H:%M:%S')}")
         
         if health_data.get('completion_ratios_loaded'):
             st.info("📊 Completion ratios loaded")
     else:
-        st.error("❌ API Offline")
-        st.caption("Please start the API server")
+        st.error("❌ Backend Not Ready")
+        st.caption("Backend modules failed to load")
 
 # ============================================================================
 # MAIN

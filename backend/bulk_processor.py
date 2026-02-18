@@ -440,7 +440,12 @@ def generate_output_excel(parsed_inputs, forecast_df, output_dir='./'):
             forecast_occ = forecast_lookup.get(key, None)
 
             ws1.cell(row=row_num, column=col_idx, value=current_occ)
-            ws1.cell(row=row_num, column=col_idx + 1, value=forecast_occ)
+            forecast_cell = ws1.cell(row=row_num, column=col_idx + 1)
+            if forecast_occ is None:
+                forecast_cell.value = None
+            else:
+                forecast_cell.value = round(float(forecast_occ), 1)
+                forecast_cell.number_format = '0.0'
 
             col_idx += 2
 
