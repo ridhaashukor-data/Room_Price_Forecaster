@@ -144,6 +144,8 @@ Core:
 Single forecast history:
 - `GET /single/history`
 - `GET /single/history/{record_id}`
+- `PATCH /single/history/{record_id}/note`
+- `DELETE /single/history/{record_id}/note`
 
 Bulk history:
 - `GET /bulk/history`

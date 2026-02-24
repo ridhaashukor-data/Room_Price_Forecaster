@@ -77,16 +77,18 @@ def _to_mongo_compatible(value: Any) -> Any:
     return str(value)
 
 
-def _persist_single_forecast(input_payload: dict, output_payload: dict) -> None:
+def _persist_single_forecast(input_payload: dict, output_payload: dict, note: Optional[str] = None) -> None:
     """Persist single-day forecast request and response to MongoDB."""
     if not mongo_db:
         return
 
     document = {
         "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow(),
         "source": "api_forecast",
         "input": _to_mongo_compatible(input_payload),
         "output": _to_mongo_compatible(output_payload),
+        "note": (note or "").strip(),
     }
     mongo_db["single_day_forecasts"].insert_one(document)
 
@@ -180,7 +182,8 @@ class SingleDayInput(BaseModel):
                 "target_occupancy": 85.0,
                 "sensitivity_factor": 0.5,
                 "event_level": "none",
-                "total_rooms_available": 100
+                "total_rooms_available": 100,
+                "note": "Weekend city event expected"
             }
         }
     )
@@ -193,6 +196,12 @@ class SingleDayInput(BaseModel):
     sensitivity_factor: float = Field(..., description="Sensitivity factor (0.3, 0.5, or 0.8)")
     event_level: str = Field(..., description="Event level: 'none', 'minor', or 'major'")
     total_rooms_available: int = Field(..., gt=0, description="Total rooms available")
+    note: Optional[str] = Field(default="", max_length=500, description="Optional note attached to this single-day forecast")
+
+
+class SingleHistoryNoteUpdate(BaseModel):
+    """Input model for updating single-day history note."""
+    note: str = Field(..., min_length=1, max_length=500, description="Updated note text")
 
 
 class ForecastOutput(BaseModel):
@@ -286,11 +295,12 @@ async def single_day_forecast(input_data: SingleDayInput):
     try:
         # Convert Pydantic model to dict
         inputs = input_data.model_dump()
+        note_text = (inputs.pop("note", "") or "").strip()
         
         # Run forecast
         result = forecast_and_price(inputs, completion_ratios_df)
         try:
-            _persist_single_forecast(inputs, result)
+            _persist_single_forecast(inputs, result, note=note_text)
         except Exception as db_error:
             print(f"⚠️  Warning: Could not persist single forecast: {db_error}")
         
@@ -424,8 +434,10 @@ async def single_history(limit: int = 20):
             {},
             {
                 "created_at": 1,
+                "updated_at": 1,
                 "input": 1,
                 "output": 1,
+                "note": 1,
             },
         )
         .sort("created_at", -1)
@@ -435,18 +447,21 @@ async def single_history(limit: int = 20):
     history_items = []
     for record in records:
         created_at = record.get("created_at")
+        updated_at = record.get("updated_at")
         input_payload = record.get("input") or {}
         output_payload = record.get("output") or {}
         history_items.append(
             {
                 "id": str(record.get("_id")),
                 "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
                 "stay_date": input_payload.get("stay_date"),
                 "today_date": input_payload.get("today_date"),
                 "event_level": input_payload.get("event_level"),
                 "forecast_occupancy_pct": output_payload.get("forecast_occupancy_pct"),
                 "recommended_adr": output_payload.get("recommended_adr"),
                 "demand_signal": output_payload.get("demand_signal"),
+                "note": record.get("note") or "",
             }
         )
 
@@ -471,22 +486,95 @@ async def single_history_detail(record_id: str):
 
     record = mongo_db["single_day_forecasts"].find_one(
         {"_id": object_id},
-        {"created_at": 1, "input": 1, "output": 1, "source": 1},
+        {"created_at": 1, "updated_at": 1, "input": 1, "output": 1, "source": 1, "note": 1},
     )
     if not record:
         raise HTTPException(status_code=404, detail="Record not found")
 
     created_at = record.get("created_at")
+    updated_at = record.get("updated_at")
     return JSONResponse(
         content={
             "status": "success",
             "data": {
                 "id": str(record.get("_id")),
                 "created_at": created_at.isoformat() if created_at else None,
+                "updated_at": updated_at.isoformat() if updated_at else None,
                 "source": record.get("source"),
                 "input": record.get("input") or {},
                 "output": record.get("output") or {},
+                "note": record.get("note") or "",
             },
+        }
+    )
+
+
+@app.patch("/single/history/{record_id}/note")
+async def update_single_history_note(record_id: str, payload: SingleHistoryNoteUpdate):
+    """Update note text for one previously generated single-day forecast record."""
+    if not mongo_db:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+
+    try:
+        object_id = ObjectId(record_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid record id")
+
+    note_text = payload.note.strip()
+    if not note_text:
+        raise HTTPException(status_code=400, detail="Note must not be empty")
+
+    update_result = mongo_db["single_day_forecasts"].update_one(
+        {"_id": object_id},
+        {
+            "$set": {
+                "note": note_text,
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "message": "Single-day note updated",
+            "data": {"updated_count": update_result.modified_count},
+        }
+    )
+
+
+@app.delete("/single/history/{record_id}/note")
+async def delete_single_history_note(record_id: str):
+    """Delete note text for one previously generated single-day forecast record."""
+    if not mongo_db:
+        raise HTTPException(status_code=503, detail="MongoDB is not connected")
+
+    try:
+        object_id = ObjectId(record_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid record id")
+
+    update_result = mongo_db["single_day_forecasts"].update_one(
+        {"_id": object_id},
+        {
+            "$set": {
+                "note": "",
+                "updated_at": datetime.utcnow(),
+            }
+        },
+    )
+
+    if update_result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Record not found")
+
+    return JSONResponse(
+        content={
+            "status": "success",
+            "message": "Single-day note deleted",
+            "data": {"updated_count": update_result.modified_count},
         }
     )
 

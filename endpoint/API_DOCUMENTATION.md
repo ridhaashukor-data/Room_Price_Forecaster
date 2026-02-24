@@ -78,7 +78,8 @@ Forecast occupancy and get pricing recommendations for a single date.
   "target_occupancy": 85.0,
   "sensitivity_factor": 0.5,
   "event_level": "none",
-  "total_rooms_available": 100
+  "total_rooms_available": 100,
+  "note": "Weekend city event expected"
 }
 ```
 
@@ -189,6 +190,51 @@ List previously generated bulk outputs stored in MongoDB.
       "size_bytes": 84231
     }
   ]
+}
+```
+
+---
+
+### 7a. **Update Single-Day History Note**
+
+**PATCH** `/single/history/{record_id}/note`
+
+Update note text for one single-day history record.
+
+**Request Body:**
+```json
+{
+  "note": "Updated note text"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Single-day note updated",
+  "data": {
+    "updated_count": 1
+  }
+}
+```
+
+---
+
+### 7b. **Delete Single-Day History Note**
+
+**DELETE** `/single/history/{record_id}/note`
+
+Clear note text for one single-day history record.
+
+**Response:**
+```json
+{
+  "status": "success",
+  "message": "Single-day note deleted",
+  "data": {
+    "updated_count": 1
+  }
 }
 ```
 
