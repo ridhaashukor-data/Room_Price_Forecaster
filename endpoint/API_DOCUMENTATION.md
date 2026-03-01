@@ -293,6 +293,123 @@ Delete old bulk history records in batches to control storage growth.
 
 ---
 
+### 11. **Run Backtesting**
+
+**POST** `/backtest`
+
+Run occupancy forecast backtesting using historical booking snapshots.
+
+**Request Body:**
+```json
+{
+  "total_rooms_available": 100,
+  "start_date": "2024-01-01",
+  "end_date": "2025-12-31",
+  "day_type": "all",
+  "days_out_min": 0,
+  "days_out_max": 30,
+  "include_details": true,
+  "detail_limit": 500
+}
+```
+
+**Response (example):**
+```json
+{
+  "status": "success",
+  "data": {
+    "summary": {
+      "count": 1000,
+      "mae": 4.12,
+      "rmse": 5.36,
+      "mape": 6.04,
+      "bias": -0.73,
+      "within_3_pct": 41.2,
+      "within_5_pct": 68.4,
+      "within_10_pct": 93.1
+    },
+    "by_day_type": [],
+    "by_days_out": [],
+    "details": [],
+    "input_filters": {},
+    "dataset_stats": {}
+  }
+}
+```
+
+Notes:
+- `day_type` supports: `all`, `weekday`, `weekend`
+- `days_out_min/max` must stay in range `0-30`
+- `start_date/end_date` format is `YYYY-MM-DD`
+
+---
+
+### 12. **Preview Uploaded Backtest File**
+
+**POST** `/backtest/upload/preview`
+
+Upload CSV/Excel and receive detected columns + sample rows to help with mapping.
+
+**Request:**
+- Form-data file field: `file`
+
+**Response (example):**
+```json
+{
+  "status": "success",
+  "data": {
+    "filename": "my_data.csv",
+    "row_count": 3450,
+    "column_count": 8,
+    "columns": ["booking_id", "stay_date", "booking_date", "rooms_booked"],
+    "sample_rows": []
+  }
+}
+```
+
+---
+
+### 12a. **Download Upload Template**
+
+**GET** `/backtest/upload/template`
+
+Download a sample CSV template for custom backtesting uploads.
+
+**Response:** CSV file download (`backtest_upload_template.csv`)
+
+---
+
+### 13. **Run Backtest With Uploaded Data**
+
+**POST** `/backtest/upload/run`
+
+Run backtest on uploaded **raw booking** CSV/Excel with explicit column mapping.
+
+**Request:**
+- Form-data file field: `file`
+- Form-data text field: `mapping_json` (JSON string)
+- Optional filters: `start_date`, `end_date`, `day_type`, `days_out_min`, `days_out_max`
+
+**`mapping_json` example:**
+```json
+{
+  "raw_data_mode": true,
+  "stay_date_col": "stay_date",
+  "booking_date_col": "booking_date",
+  "rooms_per_row_col": "rooms_booked",
+  "stay_date_format": "%Y-%m-%d",
+  "booking_date_format": "%Y-%m-%d"
+}
+```
+
+Notes:
+- Only raw booking input is supported for uploaded backtesting
+- `stay_date_col` and `booking_date_col` are required
+- `rooms_per_row_col` is optional (if omitted, each row is treated as 1 room)
+- System auto-aggregates raw rows into snapshot curves and computes final occupancy internally
+
+---
+
 ## Testing with cURL
 
 ### Single-day forecast:
@@ -321,6 +438,38 @@ curl -O "http://localhost:8000/bulk/template"
 curl -X POST "http://localhost:8000/bulk/upload" \
   -F "file=@occupancy_template.xlsx" \
   --output forecast_output.xlsx
+```
+
+### Run backtest:
+```bash
+curl -X POST "http://localhost:8000/backtest" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "total_rooms_available": 100,
+    "day_type": "all",
+    "days_out_min": 0,
+    "days_out_max": 30,
+    "include_details": false,
+    "detail_limit": 100
+  }'
+```
+
+### Preview uploaded file for mapping:
+```bash
+curl -X POST "http://localhost:8000/backtest/upload/preview" \
+  -F "file=@my_backtest_data.csv"
+```
+
+### Download upload template:
+```bash
+curl -O "http://localhost:8000/backtest/upload/template"
+```
+
+### Run uploaded backtest with mapping:
+```bash
+curl -X POST "http://localhost:8000/backtest/upload/run" \
+  -F "file=@my_backtest_data.csv" \
+  -F 'mapping_json={"raw_data_mode":true,"stay_date_col":"stay_date","booking_date_col":"booking_date","rooms_per_row_col":"rooms_booked","stay_date_format":"%Y-%m-%d","booking_date_format":"%Y-%m-%d"}'
 ```
 
 ---

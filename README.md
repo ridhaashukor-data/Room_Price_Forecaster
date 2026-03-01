@@ -4,6 +4,7 @@ Hotel occupancy forecasting system with:
 - FastAPI backend (`endpoint/endpoint.py`)
 - Streamlit frontend (`frontend/frontend.py`)
 - Single-day forecast + bulk Excel forecast
+- Historical occupancy backtesting
 - Optional MongoDB-backed history
 
 ---
@@ -30,6 +31,15 @@ If MongoDB is connected, the system stores:
 - Bulk output files (latest records retained)
 
 If MongoDB is not configured, forecasting still works; history endpoints return unavailable/offline messages.
+
+### 4) Backtesting (MVP)
+Run historical forecast evaluation and review:
+- Overall metrics (MAE, RMSE, MAPE, bias)
+- Accuracy bands (within ±3, ±5, ±10 occupancy points)
+- Breakdown by day type and days-out
+- Optional detailed row-level actual vs predicted output
+- Support for user-uploaded raw booking CSV/XLSX data with column mapping and auto-aggregation
+- Downloadable sample upload template for custom data onboarding
 
 ---
 
@@ -138,6 +148,9 @@ Core:
 - `GET /health`
 - `GET /options`
 - `POST /forecast`
+- `POST /backtest`
+- `POST /backtest/upload/preview`
+- `POST /backtest/upload/run`
 - `GET /bulk/template`
 - `POST /bulk/upload`
 

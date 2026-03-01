@@ -7,7 +7,7 @@ FastAPI endpoints for:
 3. Template generation
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Optional, List, Any
@@ -17,6 +17,7 @@ import sys
 from datetime import datetime, timedelta
 import tempfile
 from pathlib import Path
+import json
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -33,6 +34,12 @@ from forecaster import (
 from bulk_processor import (
     generate_template,
     process_bulk_forecast
+)
+from backtester import (
+    run_backtest,
+    get_uploaded_preview,
+    run_backtest_uploaded,
+    generate_uploaded_backtest_template_csv,
 )
 
 # ============================================================================
@@ -235,6 +242,18 @@ class StatusResponse(BaseModel):
     data: Optional[dict] = None
 
 
+class BacktestInput(BaseModel):
+    """Input model for occupancy forecast backtesting."""
+    total_rooms_available: int = Field(default=100, gt=0, description="Total rooms available used to convert cumulative bookings into occupancy %")
+    start_date: Optional[str] = Field(default=None, description="Optional stay-date filter start in YYYY-MM-DD")
+    end_date: Optional[str] = Field(default=None, description="Optional stay-date filter end in YYYY-MM-DD")
+    day_type: str = Field(default="all", description="Filter: all, weekday, or weekend")
+    days_out_min: int = Field(default=0, ge=0, le=30, description="Minimum days_out filter (0-30)")
+    days_out_max: int = Field(default=30, ge=0, le=30, description="Maximum days_out filter (0-30)")
+    include_details: bool = Field(default=True, description="Include row-level prediction details in response")
+    detail_limit: int = Field(default=500, ge=1, le=5000, description="Maximum detail rows returned when include_details=true")
+
+
 # ============================================================================
 # FASTAPI APP
 # ============================================================================
@@ -263,7 +282,11 @@ async def root():
                 "/forecast - Single-day forecast",
                 "/bulk/upload - Bulk Excel processing",
                 "/bulk/template - Download template",
-                "/options - Get input options"
+                "/options - Get input options",
+                "/backtest - Historical occupancy backtesting",
+                "/backtest/upload/template - Download sample upload file",
+                "/backtest/upload/preview - Detect upload columns",
+                "/backtest/upload/run - Run mapped upload backtest"
             ]
         }
     )
@@ -401,6 +424,104 @@ async def bulk_forecast_upload(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing file: {str(e)}")
+
+
+@app.post("/backtest")
+async def run_backtest_endpoint(input_data: BacktestInput):
+    """Run occupancy forecast backtesting against historical snapshots."""
+    try:
+        payload = input_data.model_dump()
+        result = run_backtest(
+            completion_ratios_df=completion_ratios_df,
+            total_rooms_available=payload["total_rooms_available"],
+            start_date=payload.get("start_date"),
+            end_date=payload.get("end_date"),
+            day_type=payload.get("day_type", "all"),
+            days_out_min=payload.get("days_out_min", 0),
+            days_out_max=payload.get("days_out_max", 30),
+            include_details=payload.get("include_details", True),
+            detail_limit=payload.get("detail_limit", 500),
+        )
+        return JSONResponse(content={"status": "success", "data": result})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error running backtest: {str(e)}")
+
+
+@app.post("/backtest/upload/preview")
+async def backtest_upload_preview(file: UploadFile = File(...)):
+    """Preview uploaded backtest file columns and sample rows for mapping."""
+    try:
+        file_bytes = await file.read()
+        preview = get_uploaded_preview(file_bytes=file_bytes, filename=file.filename or "uploaded_file")
+        return JSONResponse(content={"status": "success", "data": preview})
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating upload preview: {str(e)}")
+
+
+@app.get("/backtest/upload/template")
+async def download_backtest_upload_template():
+    """Download sample CSV template for custom uploaded backtesting."""
+    try:
+        csv_bytes, filename, media_type = generate_uploaded_backtest_template_csv()
+        return Response(
+            content=csv_bytes,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            },
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating upload template: {str(e)}")
+
+
+@app.post("/backtest/upload/run")
+async def run_backtest_uploaded_endpoint(
+    file: UploadFile = File(...),
+    mapping_json: str = Form(...),
+    total_rooms_available: int = Form(100),
+    start_date: Optional[str] = Form(None),
+    end_date: Optional[str] = Form(None),
+    day_type: str = Form("all"),
+    days_out_min: int = Form(0),
+    days_out_max: int = Form(30),
+    include_details: bool = Form(True),
+    detail_limit: int = Form(500),
+):
+    """Run backtest using user-uploaded CSV/Excel with explicit column mapping."""
+    try:
+        try:
+            mapping = json.loads(mapping_json)
+        except Exception:
+            raise HTTPException(status_code=400, detail="mapping_json must be valid JSON")
+
+        file_bytes = await file.read()
+        result = run_backtest_uploaded(
+            file_bytes=file_bytes,
+            filename=file.filename or "uploaded_file",
+            mapping=mapping,
+            completion_ratios_df=completion_ratios_df,
+            total_rooms_available=total_rooms_available,
+            start_date=start_date,
+            end_date=end_date,
+            day_type=day_type,
+            days_out_min=days_out_min,
+            days_out_max=days_out_max,
+            include_details=include_details,
+            detail_limit=detail_limit,
+        )
+        return JSONResponse(content={"status": "success", "data": result})
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error running uploaded backtest: {str(e)}")
 
 
 @app.get("/health")

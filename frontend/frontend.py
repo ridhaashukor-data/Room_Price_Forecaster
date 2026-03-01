@@ -10,6 +10,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, timezone
 import os
+import json
 import requests
 from pathlib import Path
 from dotenv import load_dotenv
@@ -60,7 +61,10 @@ def run_backend(endpoint, method="GET", data=None, files=None):
         if method == "GET":
             response = requests.get(url, timeout=REQUEST_TIMEOUT)
         elif method == "POST":
-            response = requests.post(url, json=data, files=files, timeout=REQUEST_TIMEOUT)
+            if files:
+                response = requests.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT)
+            else:
+                response = requests.post(url, json=data, timeout=REQUEST_TIMEOUT)
         elif method == "PATCH":
             response = requests.patch(url, json=data, timeout=REQUEST_TIMEOUT)
         elif method == "DELETE":
@@ -100,7 +104,7 @@ st.title("🏨 Hotel Occupancy Forecasting System")
 st.markdown("---")
 
 # Create tabs
-tab1, tab2 = st.tabs(["📊 Single-Day Forecast", "📁 Bulk Forecast"])
+tab1, tab2, tab3 = st.tabs(["📊 Single-Day Forecast", "📁 Bulk Forecast", "🧪 Backtesting"])
 
 if "single_last_result" not in st.session_state:
     st.session_state["single_last_result"] = None
@@ -653,6 +657,309 @@ with tab2:
         - Past dates are ignored
         - Color gradient: Green (50%) → Yellow (75%) → Red (100%+)
         """)
+
+# ============================================================================
+# TAB 3: BACKTESTING
+# ============================================================================
+
+with tab3:
+    st.header("Backtesting")
+    st.write("Evaluate occupancy forecast accuracy using historical booking snapshots.")
+
+    with st.expander("📘 How to read these metrics", expanded=False):
+        st.markdown(
+            """
+            - **Rows Evaluated**: Number of historical prediction points tested.
+            - **MAE**: Average absolute error in occupancy points. Lower is better.
+            - **RMSE**: Penalizes large misses more than MAE. If RMSE is much higher than MAE, there are outliers.
+            - **MAPE (%)**: Average percentage error relative to actual occupancy. Lower is better.
+            - **Within ±5%**: Share of predictions with absolute error ≤ 5 occupancy points. Higher is better.
+            - **Bias**: Average signed error (`predicted - actual`). Positive means over-forecasting; negative means under-forecasting.
+            """
+        )
+
+    def interpret_bias(value):
+        if value is None:
+            return "Unknown"
+        if value > 0.5:
+            return "Over-forecasting"
+        if value < -0.5:
+            return "Under-forecasting"
+        return "Near neutral"
+
+    def interpret_precision(within_3_pct):
+        if within_3_pct is None:
+            return "Unknown"
+        if within_3_pct >= 70:
+            return "High precision"
+        if within_3_pct >= 55:
+            return "Moderate precision"
+        return "Lower precision"
+
+    def render_backtest_result(backtest_result):
+        summary = backtest_result.get("summary", {})
+        dataset_stats = backtest_result.get("dataset_stats", {})
+
+        st.success("✅ Backtest completed")
+
+        metric_col1, metric_col2, metric_col3, metric_col4, metric_col5 = st.columns(5)
+        metric_col1.metric("Rows Evaluated", f"{summary.get('count', 0)}")
+        metric_col2.metric("MAE", f"{summary.get('mae', 'N/A')}")
+        metric_col3.metric("RMSE", f"{summary.get('rmse', 'N/A')}")
+        metric_col4.metric("MAPE (%)", f"{summary.get('mape', 'N/A')}")
+        metric_col5.metric("Within ±5%", f"{summary.get('within_5_pct', 'N/A')}%")
+
+        st.caption(
+            f"Bias interpretation: {interpret_bias(summary.get('bias'))} | "
+            f"Precision interpretation: {interpret_precision(summary.get('within_3_pct'))}"
+        )
+
+        st.caption(
+            f"Source rows: {dataset_stats.get('source_rows', 0)} | "
+            f"Candidate rows: {dataset_stats.get('candidate_rows', 0)} | "
+            f"Skipped rows: {dataset_stats.get('skipped_rows', 0)}"
+        )
+
+        by_day_type = backtest_result.get("by_day_type", [])
+        if by_day_type:
+            st.markdown("### By Day Type")
+            by_day_type_df = pd.DataFrame(by_day_type)
+            by_day_type_df["bias_read"] = by_day_type_df["bias"].apply(interpret_bias)
+            by_day_type_df["within_3_read"] = by_day_type_df["within_3_pct"].apply(interpret_precision)
+            st.dataframe(by_day_type_df, use_container_width=True)
+
+        by_days_out = backtest_result.get("by_days_out", [])
+        if by_days_out:
+            st.markdown("### By Days Out")
+            by_days_out_df = pd.DataFrame(by_days_out)
+            by_days_out_df["bias_read"] = by_days_out_df["bias"].apply(interpret_bias)
+            by_days_out_df["within_3_read"] = by_days_out_df["within_3_pct"].apply(interpret_precision)
+            st.dataframe(by_days_out_df, use_container_width=True)
+
+        details = backtest_result.get("details", [])
+        if details:
+            st.markdown("### Detailed Rows")
+            st.dataframe(pd.DataFrame(details), use_container_width=True)
+
+    st.markdown("### Data Source")
+    backtest_data_source = st.radio(
+        "Choose dataset",
+        options=["Built-in dataset", "Upload my own data"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+
+    with filter_col1:
+        use_start_date_filter = st.checkbox("Use start date filter", value=False)
+        backtest_start_date = st.date_input(
+            "Start Stay Date",
+            value=datetime(2024, 1, 1),
+            help="Filter historical stay dates from this date",
+            disabled=not use_start_date_filter,
+        )
+
+        use_end_date_filter = st.checkbox("Use end date filter", value=False)
+        backtest_end_date = st.date_input(
+            "End Stay Date",
+            value=datetime.now(),
+            help="Filter historical stay dates until this date",
+            disabled=not use_end_date_filter,
+        )
+
+    with filter_col2:
+        backtest_day_type = st.selectbox(
+            "Day Type",
+            options=["all", "weekday", "weekend"],
+            index=0,
+            help="Filter by weekday/weekend or use all records",
+        )
+
+        backtest_total_rooms = st.number_input(
+            "Total Rooms Available",
+            min_value=1,
+            value=100,
+            step=1,
+            help="Used when converting cumulative bookings to occupancy %",
+        )
+
+    with filter_col3:
+        backtest_days_out_range = st.slider(
+            "Days Out Range",
+            min_value=0,
+            max_value=30,
+            value=(0, 30),
+            help="Evaluate only these days_out snapshots",
+        )
+
+        backtest_include_details = st.checkbox(
+            "Include row-level details",
+            value=True,
+            help="Return detailed prediction rows in addition to summary metrics",
+        )
+
+        backtest_detail_limit = st.number_input(
+            "Detail row limit",
+            min_value=1,
+            max_value=5000,
+            value=500,
+            step=50,
+            help="Maximum detailed rows displayed",
+        )
+
+    base_payload = {
+        "total_rooms_available": int(backtest_total_rooms),
+        "start_date": backtest_start_date.strftime("%Y-%m-%d") if use_start_date_filter else None,
+        "end_date": backtest_end_date.strftime("%Y-%m-%d") if use_end_date_filter else None,
+        "day_type": backtest_day_type,
+        "days_out_min": int(backtest_days_out_range[0]),
+        "days_out_max": int(backtest_days_out_range[1]),
+        "include_details": bool(backtest_include_details),
+        "detail_limit": int(backtest_detail_limit),
+    }
+
+    if backtest_data_source == "Built-in dataset":
+        if st.button("🚀 Run Backtest", type="primary", use_container_width=True):
+            with st.spinner("Running backtest..."):
+                backtest_response = run_backend("/backtest", method="POST", data=base_payload)
+
+            if backtest_response and backtest_response.status_code == 200:
+                render_backtest_result(backtest_response.json().get("data", {}))
+    else:
+        st.markdown("### Upload Data")
+        if st.button("⬇️ Download Sample Upload Template", type="secondary", key="download_backtest_upload_template"):
+            template_response = run_backend("/backtest/upload/template")
+            if template_response and template_response.status_code == 200:
+                st.download_button(
+                    label="💾 Save Backtest Upload Template",
+                    data=template_response.content,
+                    file_name="backtest_upload_template.csv",
+                    mime="text/csv",
+                    key="save_backtest_upload_template",
+                )
+                st.success("✅ Template ready. Click 'Save Backtest Upload Template'.")
+
+        uploaded_backtest_file = st.file_uploader(
+            "Upload CSV or Excel",
+            type=["csv", "xlsx", "xls"],
+            help="Upload raw booking data (booking-level rows) for custom backtesting",
+            key="backtest_custom_upload_file",
+        )
+
+        if uploaded_backtest_file is not None:
+            uploaded_bytes = uploaded_backtest_file.getvalue()
+
+            if st.button("🔍 Analyze File Columns", type="secondary", key="backtest_analyze_upload"):
+                preview_files = {
+                    "file": (
+                        uploaded_backtest_file.name,
+                        uploaded_bytes,
+                        "application/octet-stream",
+                    )
+                }
+                preview_response = run_backend("/backtest/upload/preview", method="POST", files=preview_files)
+                if preview_response and preview_response.status_code == 200:
+                    st.session_state["backtest_upload_preview"] = preview_response.json().get("data", {})
+                    st.session_state["backtest_upload_preview_filename"] = uploaded_backtest_file.name
+
+            preview_payload = st.session_state.get("backtest_upload_preview", {})
+            preview_filename = st.session_state.get("backtest_upload_preview_filename")
+
+            if preview_payload and preview_filename == uploaded_backtest_file.name:
+                st.caption(
+                    f"Detected columns: {preview_payload.get('column_count', 0)} | "
+                    f"Rows: {preview_payload.get('row_count', 0)}"
+                )
+
+                preview_rows = preview_payload.get("sample_rows", [])
+                if preview_rows:
+                    st.markdown("### File Sample")
+                    st.dataframe(pd.DataFrame(preview_rows), use_container_width=True)
+
+                columns = preview_payload.get("columns", [])
+                select_options = ["<None>"] + columns
+
+                def default_index_for(candidates):
+                    for candidate in candidates:
+                        for idx, column in enumerate(columns):
+                            if candidate in str(column).lower():
+                                return idx + 1
+                    return 0
+
+                st.info("Raw-only mode: upload booking-level data. System will aggregate snapshots automatically.")
+                st.markdown("### Raw Column Mapping")
+                map_col1, map_col2 = st.columns(2)
+
+                with map_col1:
+                    stay_date_col = st.selectbox(
+                        "Stay Date (required)",
+                        options=select_options,
+                        index=default_index_for(["stay_date", "stay date", "checkin", "check_in"]),
+                    )
+                    booking_date_col = st.selectbox(
+                        "Booking Date (required)",
+                        options=select_options,
+                        index=default_index_for(["booking_date", "booking date", "booked_at", "created_at"]),
+                    )
+
+                with map_col2:
+                    rooms_per_row_col = st.selectbox(
+                        "Rooms Per Row (optional)",
+                        options=select_options,
+                        index=default_index_for(["rooms_booked", "rooms", "room_count", "qty", "quantity"]),
+                        help="Leave empty if each row means one room booking",
+                    )
+                    stay_date_format = st.text_input(
+                        "Stay Date Format (optional)",
+                        value="",
+                        placeholder="e.g., %d%m%Y or %Y-%m-%d",
+                    )
+                    booking_date_format = st.text_input(
+                        "Booking Date Format (optional)",
+                        value="",
+                        placeholder="e.g., %d/%m/%Y",
+                    )
+
+                mapping = {
+                    "raw_data_mode": True,
+                    "stay_date_col": None if stay_date_col == "<None>" else stay_date_col,
+                    "booking_date_col": None if booking_date_col == "<None>" else booking_date_col,
+                    "rooms_per_row_col": None if rooms_per_row_col == "<None>" else rooms_per_row_col,
+                    "stay_date_format": stay_date_format.strip() or None,
+                    "booking_date_format": booking_date_format.strip() or None,
+                }
+
+                if st.button("🚀 Run Uploaded Backtest", type="primary", use_container_width=True):
+                    upload_run_payload = {
+                        "mapping_json": json.dumps(mapping),
+                        "total_rooms_available": str(base_payload["total_rooms_available"]),
+                        "start_date": base_payload["start_date"] or "",
+                        "end_date": base_payload["end_date"] or "",
+                        "day_type": base_payload["day_type"],
+                        "days_out_min": str(base_payload["days_out_min"]),
+                        "days_out_max": str(base_payload["days_out_max"]),
+                        "include_details": str(base_payload["include_details"]),
+                        "detail_limit": str(base_payload["detail_limit"]),
+                    }
+                    upload_files = {
+                        "file": (
+                            uploaded_backtest_file.name,
+                            uploaded_bytes,
+                            "application/octet-stream",
+                        )
+                    }
+
+                    with st.spinner("Running uploaded backtest..."):
+                        upload_run_response = run_backend(
+                            "/backtest/upload/run",
+                            method="POST",
+                            data=upload_run_payload,
+                            files=upload_files,
+                        )
+
+                    if upload_run_response and upload_run_response.status_code == 200:
+                        render_backtest_result(upload_run_response.json().get("data", {}))
 
 # ============================================================================
 # SIDEBAR
