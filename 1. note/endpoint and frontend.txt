@@ -5,6 +5,6 @@ Endpoint
 Frontend
 - before running frontend, split the terminal into 2
 -run the backend first
--to run frontend, point to root, streamlit run file_name.py
+-to run frontend, point to folder, streamlit run file_name.py
 
 In the frontend code, make sure the port in URL is the same w fastapi

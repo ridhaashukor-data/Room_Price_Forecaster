@@ -18,6 +18,23 @@ Interactive API docs (Swagger UI): `http://localhost:8000/docs`
 
 ## API Endpoints
 
+## Upload Policy (Applies to file-upload endpoints)
+
+- **Maximum upload size:** `50 MB` per request
+- **Rejected with:** `413 Payload Too Large` when file exceeds the limit
+- **File type validation:** based on filename extension
+
+Allowed extensions by endpoint:
+- `/bulk/upload`: `.xlsx`, `.xls`
+- `/backtest/upload/preview`: `.csv`, `.xlsx`, `.xls`
+- `/backtest/upload/run`: `.csv`, `.xlsx`, `.xls`
+
+Common validation errors:
+- `400` for missing filename
+- `400` for unsupported extension
+
+---
+
 ### 1. **Health Check**
 
 **GET** `/`
@@ -137,6 +154,7 @@ Upload filled Excel template and get forecast output.
 - Form data with file upload
 - Field name: `file`
 - File type: `.xlsx` or `.xls`
+- Max upload size: `50 MB`
 
 **Response:** Excel file download with 2 sheets:
 1. **Snapshot Sheet**: Current + Forecasted occupancy with conditional formatting
@@ -352,6 +370,8 @@ Upload CSV/Excel and receive detected columns + sample rows to help with mapping
 
 **Request:**
 - Form-data file field: `file`
+- Supported file types: `.csv`, `.xlsx`, `.xls`
+- Max upload size: `50 MB`
 
 **Response (example):**
 ```json
@@ -361,11 +381,19 @@ Upload CSV/Excel and receive detected columns + sample rows to help with mapping
     "filename": "my_data.csv",
     "row_count": 3450,
     "column_count": 8,
-    "columns": ["booking_id", "stay_date", "booking_date", "rooms_booked"],
+    "columns": ["booking_id", "stay_date", "booking_date"],
     "sample_rows": []
   }
 }
 ```
+
+---
+
+### 12b. **Get Mapping Requirements**
+
+**GET** `/backtest/upload/mapping/requirements`
+
+Returns required/optional field keys for uploaded dataset pairing UI.
 
 ---
 
@@ -389,24 +417,101 @@ Run backtest on uploaded **raw booking** CSV/Excel with explicit column mapping.
 - Form-data file field: `file`
 - Form-data text field: `mapping_json` (JSON string)
 - Optional filters: `start_date`, `end_date`, `day_type`, `days_out_min`, `days_out_max`
+- Supported file types: `.csv`, `.xlsx`, `.xls`
+- Max upload size: `50 MB`
 
 **`mapping_json` example:**
 ```json
 {
-  "raw_data_mode": true,
+  "booking_id_col": "booking_id",
   "stay_date_col": "stay_date",
   "booking_date_col": "booking_date",
-  "rooms_per_row_col": "rooms_booked",
   "stay_date_format": "%Y-%m-%d",
   "booking_date_format": "%Y-%m-%d"
 }
 ```
 
 Notes:
-- Only raw booking input is supported for uploaded backtesting
-- `stay_date_col` and `booking_date_col` are required
-- `rooms_per_row_col` is optional (if omitted, each row is treated as 1 room)
-- System auto-aggregates raw rows into snapshot curves and computes final occupancy internally
+- Upload data should follow the raw booking template format
+- `stay_date_col` is required
+- `booking_date_col` is required
+- `booking_id_col` is optional and used only as reference metadata
+- Completion-ratio inputs are derived internally from raw booking rows
+
+---
+
+### 14. **List Completion-Ratio Datasets**
+
+**GET** `/model/datasets`
+
+Returns available completion-ratio datasets and the currently active dataset used by forecasting.
+
+Notes:
+- Active dataset is persisted and restored on API restart.
+- Single-day and bulk forecasting always use the active dataset.
+
+**Response (example):**
+```json
+{
+  "status": "success",
+  "data": {
+    "active_dataset_id": "default",
+    "active_dataset": {
+      "id": "default",
+      "label": "Default completion ratios",
+      "source": "built-in"
+    },
+    "datasets": []
+  }
+}
+```
+
+---
+
+### 15. **Select Active Completion-Ratio Dataset**
+
+**POST** `/model/datasets/select`
+
+Switch active dataset used by single-day, bulk, and backtest forecasting calculations.
+
+**Request Body:**
+```json
+{
+  "dataset_id": "upload-ab12cd34"
+}
+```
+
+---
+
+### 16. **Retrain Completion Ratios (Built-in Dataset)**
+
+**POST** `/model/retrain/builtin`
+
+Retrains completion ratios from built-in historical data.
+
+**Request Body:**
+```json
+{
+  "label": "Built-in retrain Mar 2026",
+  "activate": true
+}
+```
+
+---
+
+### 17. **Retrain Completion Ratios (Uploaded Dataset)**
+
+**POST** `/model/retrain/upload`
+
+Retrains completion ratios from uploaded raw booking data.
+
+**Request:**
+- Form-data file field: `file`
+- Form-data text field: `mapping_json`
+- Form-data numeric field: `total_rooms_available`
+- Optional form fields: `label`, `activate`
+
+When `activate=true`, the retrained dataset becomes active immediately.
 
 ---
 
@@ -469,7 +574,7 @@ curl -O "http://localhost:8000/backtest/upload/template"
 ```bash
 curl -X POST "http://localhost:8000/backtest/upload/run" \
   -F "file=@my_backtest_data.csv" \
-  -F 'mapping_json={"raw_data_mode":true,"stay_date_col":"stay_date","booking_date_col":"booking_date","rooms_per_row_col":"rooms_booked","stay_date_format":"%Y-%m-%d","booking_date_format":"%Y-%m-%d"}'
+  -F 'mapping_json={"booking_id_col":"booking_id","stay_date_col":"stay_date","booking_date_col":"booking_date","stay_date_format":"%Y-%m-%d","booking_date_format":"%Y-%m-%d"}'
 ```
 
 ---
@@ -480,6 +585,20 @@ curl -X POST "http://localhost:8000/backtest/upload/run" \
 ```json
 {
   "detail": "Invalid date format: 1502. Expected format: DDMMYY (e.g., 150226)"
+}
+```
+
+Example file-validation `400`:
+```json
+{
+  "detail": "Invalid file type. Allowed extensions: .csv, .xls, .xlsx"
+}
+```
+
+### 413 Payload Too Large
+```json
+{
+  "detail": "File too large. Max allowed size is 50 MB"
 }
 ```
 

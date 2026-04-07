@@ -9,6 +9,7 @@ Combines:
 import pandas as pd
 from datetime import datetime
 import os
+from typing import Optional
 
 # ============================================================================
 # CONFIGURATION
@@ -156,7 +157,25 @@ def load_completion_ratios(filepath=None):
     
     return pd.read_csv(filepath)
 
-def get_completion_ratio(day_type, days_out, completion_ratios_df):
+
+def build_completion_ratio_lookup(completion_ratios_df):
+    """Build a hash lookup keyed by (day_type, days_out) for fast ratio access."""
+    lookup = {}
+    for row in completion_ratios_df.itertuples(index=False):
+        day_type = str(getattr(row, 'day_type', '')).strip().lower()
+        try:
+            days_out = int(getattr(row, 'days_out'))
+        except Exception:
+            continue
+
+        lookup[(day_type, days_out)] = {
+            'ratio': float(getattr(row, 'avg_completion_ratio')),
+            'confidence': str(getattr(row, 'confidence', 'low')),
+            'sample_count': int(getattr(row, 'sample_count', 0)),
+        }
+    return lookup
+
+def get_completion_ratio(day_type, days_out, completion_ratios_df, ratio_lookup: Optional[dict] = None):
     """
     Retrieve completion ratio for given day_type and days_out.
     
@@ -168,21 +187,27 @@ def get_completion_ratio(day_type, days_out, completion_ratios_df):
     Returns:
         dict with 'ratio', 'confidence', 'sample_count'
     """
-    # For events, use weekend completion ratios
     lookup_day_type = 'weekend' if day_type == 'event' else day_type
-    
+    try:
+        lookup_key = (str(lookup_day_type).strip().lower(), int(days_out))
+    except Exception:
+        raise ValueError(f"Invalid ratio lookup key: day_type={lookup_day_type}, days_out={days_out}")
+
+    if ratio_lookup is not None:
+        ratio_info = ratio_lookup.get(lookup_key)
+        if ratio_info is None:
+            raise ValueError(f"No completion ratio found for day_type={lookup_key[0]}, days_out={lookup_key[1]}")
+        return ratio_info
+
     result = completion_ratios_df[
-        (completion_ratios_df['day_type'] == lookup_day_type) & 
-        (completion_ratios_df['days_out'] == days_out)
+        (completion_ratios_df['day_type'] == lookup_key[0]) &
+        (completion_ratios_df['days_out'] == lookup_key[1])
     ]
-    
+
     if len(result) == 0:
-        raise ValueError(
-            f"No completion ratio found for day_type={lookup_day_type}, days_out={days_out}"
-        )
-    
+        raise ValueError(f"No completion ratio found for day_type={lookup_key[0]}, days_out={lookup_key[1]}")
+
     row = result.iloc[0]
-    
     return {
         'ratio': row['avg_completion_ratio'],
         'confidence': row['confidence'],
@@ -193,7 +218,7 @@ def get_completion_ratio(day_type, days_out, completion_ratios_df):
 # FORECASTING ENGINE
 # ============================================================================
 
-def forecast_occupancy(inputs, completion_ratios_df, config=CONFIG):
+def forecast_occupancy(inputs, completion_ratios_df, config=CONFIG, ratio_lookup: Optional[dict] = None):
     """
     Forecast final occupancy based on current booking pace.
     
@@ -224,7 +249,7 @@ def forecast_occupancy(inputs, completion_ratios_df, config=CONFIG):
         )
     
     # Get completion ratio (uses weekend ratio for events)
-    ratio_info = get_completion_ratio(day_type, days_out, completion_ratios_df)
+    ratio_info = get_completion_ratio(day_type, days_out, completion_ratios_df, ratio_lookup=ratio_lookup)
     completion_ratio = ratio_info['ratio']
     
     # Calculate forecast

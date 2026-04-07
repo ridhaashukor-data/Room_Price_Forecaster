@@ -20,6 +20,7 @@ import os
 from forecaster import (
     load_completion_ratios,
     forecast_occupancy,
+    build_completion_ratio_lookup,
     parse_date,
     CONFIG
 )
@@ -281,6 +282,7 @@ def bulk_forecast(parsed_inputs, completion_ratios_df=None):
     # Load completion ratios if not provided
     if completion_ratios_df is None:
         completion_ratios_df = load_completion_ratios()
+    ratio_lookup = build_completion_ratio_lookup(completion_ratios_df)
     
     upload_date = parsed_inputs['upload_date']
     occupancy_df = parsed_inputs['occupancy_df']
@@ -323,7 +325,7 @@ def bulk_forecast(parsed_inputs, completion_ratios_df=None):
         
         try:
             # Run forecast only (no pricing)
-            forecast_results = forecast_occupancy(inputs, completion_ratios_df)
+            forecast_results = forecast_occupancy(inputs, completion_ratios_df, ratio_lookup=ratio_lookup)
             
             # Combine results (occupancy data only)
             result = {

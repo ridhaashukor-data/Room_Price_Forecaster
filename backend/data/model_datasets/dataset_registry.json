@@ -1,0 +1,43 @@
+[
+  {
+    "id": "default",
+    "label": "Default completion ratios",
+    "source": "built-in",
+    "created_at": "2026-03-17T02:46:15.866860",
+    "training_stats": {
+      "source_rows": null,
+      "note": "Loaded from backend/data/completion_ratios.csv"
+    },
+    "training_input_metadata": {
+      "training_input_type": "built-in",
+      "raw_file_name": null,
+      "raw_uploaded_at": null,
+      "raw_row_count": null,
+      "raw_stay_date_min": null,
+      "raw_stay_date_max": null
+    },
+    "csv_file": "default.csv"
+  },
+  {
+    "id": "builtin-35ffd401",
+    "label": "persist smoke",
+    "source": "built-in-retrained",
+    "created_at": "2026-03-17T03:05:38.371930",
+    "training_stats": {
+      "source_rows": 22506,
+      "clean_rows": 22506,
+      "ratio_rows": 22506,
+      "outlier_filtered_rows": 0,
+      "missing_groups_filled": 0
+    },
+    "training_input_metadata": {
+      "training_input_type": "built-in",
+      "raw_file_name": null,
+      "raw_uploaded_at": null,
+      "raw_row_count": null,
+      "raw_stay_date_min": null,
+      "raw_stay_date_max": null
+    },
+    "csv_file": "builtin-35ffd401.csv"
+  }
+]

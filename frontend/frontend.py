@@ -20,6 +20,7 @@ load_dotenv(dotenv_path=Path(PROJECT_ROOT) / ".env")
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000").rstrip("/")
 REQUEST_TIMEOUT = int(os.getenv("API_REQUEST_TIMEOUT", "180"))
+API_KEY = (os.getenv("API_KEY") or "").strip()
 
 # ============================================================================
 # CONFIGURATION
@@ -53,22 +54,91 @@ def format_history_timestamp(timestamp_str):
     except Exception:
         return str(timestamp_str)
 
+
+def format_raw_range_date(raw_date_value):
+    """Normalize raw date range values to DD/MM/YYYY for labels."""
+    if raw_date_value in (None, ""):
+        return "N/A"
+
+    text = str(raw_date_value).strip()
+    if not text or text.upper() == "N/A":
+        return "N/A"
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%d/%m/%Y")
+        except Exception:
+            continue
+
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%d/%m/%Y")
+    except Exception:
+        return text
+
+def format_dataset_used(active_model):
+    """Return readable active dataset details for display."""
+    model = active_model or {}
+    source = str(model.get("source") or "").strip().lower()
+    metadata = model.get("training_input_metadata") or {}
+
+    if metadata.get("training_input_type") == "raw-upload" or source.startswith("upload"):
+        file_name = metadata.get("raw_file_name") or str(model.get("source") or "").split("upload:", 1)[-1] or "Unknown file"
+        uploaded_at = format_history_timestamp(metadata.get("raw_uploaded_at"))
+        raw_date_min = format_raw_range_date(metadata.get("raw_stay_date_min"))
+        raw_date_max = format_raw_range_date(metadata.get("raw_stay_date_max"))
+        return (
+            f"Dataset used: {file_name} | uploaded: {uploaded_at} | "
+            f"raw date range: {raw_date_min} to {raw_date_max}"
+        )
+
+    if source.startswith("built-in"):
+        return "Dataset used: completion_ratios.csv (built-in)"
+
+    return f"Dataset used: {source or 'unknown'}"
+
+
+def format_date_only(timestamp_str):
+    """Convert ISO timestamp into compact date text for labels."""
+    if not timestamp_str:
+        return "N/A"
+    try:
+        timestamp_text = str(timestamp_str).replace("Z", "+00:00")
+        parsed_dt = datetime.fromisoformat(timestamp_text)
+        return parsed_dt.strftime("%Y-%m-%d")
+    except Exception:
+        return str(timestamp_str)
+
+
+def format_uploaded_dataset_name(metadata):
+    """Standard uploaded-model naming format for aggregated datasets."""
+    file_name = metadata.get("raw_file_name") or "Unknown file"
+    uploaded_at = format_history_timestamp(metadata.get("raw_uploaded_at"))
+    raw_date_min = format_raw_range_date(metadata.get("raw_stay_date_min"))
+    raw_date_max = format_raw_range_date(metadata.get("raw_stay_date_max"))
+    return (
+        "Uploaded dataset"
+        f" | uploaded: {uploaded_at}"
+        f" | raw range: {raw_date_min} to {raw_date_max}"
+        f" | file: {file_name}"
+    )
+
 def run_backend(endpoint, method="GET", data=None, files=None):
     """Call FastAPI backend over HTTP."""
     url = f"{API_BASE_URL}{endpoint}"
+    headers = {"X-API-Key": API_KEY} if API_KEY else None
 
     try:
         if method == "GET":
-            response = requests.get(url, timeout=REQUEST_TIMEOUT)
+            response = requests.get(url, timeout=REQUEST_TIMEOUT, headers=headers)
         elif method == "POST":
             if files:
-                response = requests.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT)
+                response = requests.post(url, data=data, files=files, timeout=REQUEST_TIMEOUT, headers=headers)
             else:
-                response = requests.post(url, json=data, timeout=REQUEST_TIMEOUT)
+                response = requests.post(url, json=data, timeout=REQUEST_TIMEOUT, headers=headers)
         elif method == "PATCH":
-            response = requests.patch(url, json=data, timeout=REQUEST_TIMEOUT)
+            response = requests.patch(url, json=data, timeout=REQUEST_TIMEOUT, headers=headers)
         elif method == "DELETE":
-            response = requests.delete(url, timeout=REQUEST_TIMEOUT)
+            response = requests.delete(url, timeout=REQUEST_TIMEOUT, headers=headers)
         else:
             st.error(f"❌ Unsupported operation: {method} {endpoint}")
             return None
@@ -81,6 +151,8 @@ def run_backend(endpoint, method="GET", data=None, files=None):
             except Exception:
                 error_message = response.text
             st.error(f"❌ API Error ({response.status_code}): {error_message}")
+            if response.status_code == 401 and not API_KEY:
+                st.caption("Set API_KEY in your .env so Streamlit can authenticate with the API.")
             return None
 
         return response
@@ -132,6 +204,12 @@ if "single_history_note_refresh_id" not in st.session_state:
 with tab1:
     st.header("Single-Day Occupancy Forecast")
     st.write("Get forecast and pricing recommendations for a specific date")
+
+    single_tab_model_status = run_backend("/model/datasets")
+    if single_tab_model_status and single_tab_model_status.status_code == 200:
+        active_model = single_tab_model_status.json().get("data", {}).get("active_dataset") or {}
+        if active_model:
+            st.caption(format_dataset_used(active_model))
     
     # Get input options from backend
     options_response = run_backend("/options")
@@ -529,6 +607,12 @@ with tab1:
 with tab2:
     st.header("Bulk Occupancy Forecast")
     st.write("Upload Excel with current occupancy - get side-by-side forecast output with color-coded trends")
+
+    bulk_tab_model_status = run_backend("/model/datasets")
+    if bulk_tab_model_status and bulk_tab_model_status.status_code == 200:
+        active_model = bulk_tab_model_status.json().get("data", {}).get("active_dataset") or {}
+        if active_model:
+            st.caption(format_dataset_used(active_model))
     
     # Step 1: Download template
     st.subheader("📥 Step 1: Download Template")
@@ -666,18 +750,6 @@ with tab3:
     st.header("Backtesting")
     st.write("Evaluate occupancy forecast accuracy using historical booking snapshots.")
 
-    with st.expander("📘 How to read these metrics", expanded=False):
-        st.markdown(
-            """
-            - **Rows Evaluated**: Number of historical prediction points tested.
-            - **MAE**: Average absolute error in occupancy points. Lower is better.
-            - **RMSE**: Penalizes large misses more than MAE. If RMSE is much higher than MAE, there are outliers.
-            - **MAPE (%)**: Average percentage error relative to actual occupancy. Lower is better.
-            - **Within ±5%**: Share of predictions with absolute error ≤ 5 occupancy points. Higher is better.
-            - **Bias**: Average signed error (`predicted - actual`). Positive means over-forecasting; negative means under-forecasting.
-            """
-        )
-
     def interpret_bias(value):
         if value is None:
             return "Unknown"
@@ -741,6 +813,87 @@ with tab3:
             st.markdown("### Detailed Rows")
             st.dataframe(pd.DataFrame(details), use_container_width=True)
 
+    st.markdown("### Aggregated Forecast Datasets")
+    st.caption("These are aggregated completion-ratio models used by single-day forecast, bulk forecast, and backtesting.")
+
+    model_status_response = run_backend("/model/datasets")
+    model_data = {}
+    if model_status_response and model_status_response.status_code == 200:
+        model_data = model_status_response.json().get("data", {})
+
+    active_model = model_data.get("active_dataset") or {}
+    active_model_id = model_data.get("active_dataset_id")
+    model_options = model_data.get("datasets", [])
+
+    if active_model:
+        st.info(format_dataset_used(active_model))
+
+    if model_options:
+        option_ids = [item.get("id") for item in model_options if item.get("id")]
+
+        def _model_option_label(dataset_id):
+            for item in model_options:
+                if item.get("id") == dataset_id:
+                    metadata = item.get("training_input_metadata") or {}
+                    input_type = metadata.get("training_input_type")
+                    if input_type == "raw-upload":
+                        preferred_name = item.get("label") or format_uploaded_dataset_name(metadata)
+                        raw_file_name = metadata.get("raw_file_name") or "Unknown file"
+                        raw_uploaded_at = format_history_timestamp(metadata.get("raw_uploaded_at"))
+                        raw_date_min = format_raw_range_date(metadata.get("raw_stay_date_min"))
+                        raw_date_max = format_raw_range_date(metadata.get("raw_stay_date_max"))
+                        return (
+                            f"{preferred_name} | file: {raw_file_name} | "
+                            f"uploaded: {raw_uploaded_at} | range: {raw_date_min} to {raw_date_max}"
+                        )
+                    return f"{item.get('label', dataset_id)} | built-in | uploaded: N/A | range: N/A"
+            return dataset_id
+
+        default_model_index = option_ids.index(active_model_id) if active_model_id in option_ids else 0
+        selected_model_id = st.selectbox(
+            "Select active forecast dataset",
+            options=option_ids,
+            index=default_model_index,
+            format_func=_model_option_label,
+            key="backtest_model_dataset_selector",
+        )
+
+        selected_dataset = next((item for item in model_options if item.get("id") == selected_model_id), None)
+        selected_metadata = (selected_dataset or {}).get("training_input_metadata") or {}
+        if selected_dataset:
+            if selected_metadata.get("training_input_type") == "raw-upload":
+                st.caption(
+                    "Selected aggregated model source -> "
+                    f"upload: {selected_metadata.get('raw_file_name') or 'Unknown file'} | "
+                    f"uploaded: {format_history_timestamp(selected_metadata.get('raw_uploaded_at'))} | "
+                    f"raw date range: {format_raw_range_date(selected_metadata.get('raw_stay_date_min'))} to {format_raw_range_date(selected_metadata.get('raw_stay_date_max'))}"
+                )
+            else:
+                st.caption("Selected aggregated model source -> built-in data")
+
+        dataset_action_col1, dataset_action_col2 = st.columns(2)
+        with dataset_action_col1:
+            if st.button("✅ Use Selected Dataset", type="secondary", key="backtest_apply_selected_dataset"):
+                select_response = run_backend(
+                    "/model/datasets/select",
+                    method="POST",
+                    data={"dataset_id": selected_model_id},
+                )
+                if select_response and select_response.status_code == 200:
+                    st.success("✅ Active forecast dataset updated.")
+                    st.rerun()
+
+        with dataset_action_col2:
+            delete_disabled = selected_model_id == "default"
+            if st.button("🗑️ Delete Selected Dataset", type="secondary", key="backtest_delete_selected_dataset", disabled=delete_disabled):
+                delete_response = run_backend(f"/model/datasets/{selected_model_id}", method="DELETE")
+                if delete_response and delete_response.status_code == 200:
+                    st.success("✅ Selected dataset deleted.")
+                    st.rerun()
+
+            if delete_disabled:
+                st.caption("Default dataset cannot be deleted.")
+
     st.markdown("### Data Source")
     backtest_data_source = st.radio(
         "Choose dataset",
@@ -749,74 +902,15 @@ with tab3:
         label_visibility="collapsed",
     )
 
-    filter_col1, filter_col2, filter_col3 = st.columns(3)
-
-    with filter_col1:
-        use_start_date_filter = st.checkbox("Use start date filter", value=False)
-        backtest_start_date = st.date_input(
-            "Start Stay Date",
-            value=datetime(2024, 1, 1),
-            help="Filter historical stay dates from this date",
-            disabled=not use_start_date_filter,
-        )
-
-        use_end_date_filter = st.checkbox("Use end date filter", value=False)
-        backtest_end_date = st.date_input(
-            "End Stay Date",
-            value=datetime.now(),
-            help="Filter historical stay dates until this date",
-            disabled=not use_end_date_filter,
-        )
-
-    with filter_col2:
-        backtest_day_type = st.selectbox(
-            "Day Type",
-            options=["all", "weekday", "weekend"],
-            index=0,
-            help="Filter by weekday/weekend or use all records",
-        )
-
-        backtest_total_rooms = st.number_input(
-            "Total Rooms Available",
-            min_value=1,
-            value=100,
-            step=1,
-            help="Used when converting cumulative bookings to occupancy %",
-        )
-
-    with filter_col3:
-        backtest_days_out_range = st.slider(
-            "Days Out Range",
-            min_value=0,
-            max_value=30,
-            value=(0, 30),
-            help="Evaluate only these days_out snapshots",
-        )
-
-        backtest_include_details = st.checkbox(
-            "Include row-level details",
-            value=True,
-            help="Return detailed prediction rows in addition to summary metrics",
-        )
-
-        backtest_detail_limit = st.number_input(
-            "Detail row limit",
-            min_value=1,
-            max_value=5000,
-            value=500,
-            step=50,
-            help="Maximum detailed rows displayed",
-        )
-
     base_payload = {
-        "total_rooms_available": int(backtest_total_rooms),
-        "start_date": backtest_start_date.strftime("%Y-%m-%d") if use_start_date_filter else None,
-        "end_date": backtest_end_date.strftime("%Y-%m-%d") if use_end_date_filter else None,
-        "day_type": backtest_day_type,
-        "days_out_min": int(backtest_days_out_range[0]),
-        "days_out_max": int(backtest_days_out_range[1]),
-        "include_details": bool(backtest_include_details),
-        "detail_limit": int(backtest_detail_limit),
+        "total_rooms_available": 100,
+        "start_date": None,
+        "end_date": None,
+        "day_type": "all",
+        "days_out_min": 0,
+        "days_out_max": 30,
+        "include_details": True,
+        "detail_limit": 500,
     }
 
     if backtest_data_source == "Built-in dataset":
@@ -827,7 +921,7 @@ with tab3:
             if backtest_response and backtest_response.status_code == 200:
                 render_backtest_result(backtest_response.json().get("data", {}))
     else:
-        st.markdown("### Upload Data")
+        st.markdown("### Raw Upload (Training Input)")
         if st.button("⬇️ Download Sample Upload Template", type="secondary", key="download_backtest_upload_template"):
             template_response = run_backend("/backtest/upload/template")
             if template_response and template_response.status_code == 200:
@@ -843,21 +937,31 @@ with tab3:
         uploaded_backtest_file = st.file_uploader(
             "Upload CSV or Excel",
             type=["csv", "xlsx", "xls"],
-            help="Upload raw booking data (booking-level rows) for custom backtesting",
+            help="Upload raw booking rows following the template (booking_id, stay_date, booking_date).",
             key="backtest_custom_upload_file",
         )
+
+        st.caption("Use the upload template format with raw booking rows: booking_id, stay_date, booking_date.")
+
+        mapping_requirements_response = run_backend("/backtest/upload/mapping/requirements")
+        mapping_requirements = {}
+        if mapping_requirements_response and mapping_requirements_response.status_code == 200:
+            mapping_requirements = mapping_requirements_response.json().get("data", {})
 
         if uploaded_backtest_file is not None:
             uploaded_bytes = uploaded_backtest_file.getvalue()
 
-            if st.button("🔍 Analyze File Columns", type="secondary", key="backtest_analyze_upload"):
-                preview_files = {
-                    "file": (
-                        uploaded_backtest_file.name,
-                        uploaded_bytes,
-                        "application/octet-stream",
-                    )
-                }
+            analyze_clicked = st.button("🔍 Analyze File Columns", type="secondary", key="backtest_analyze_upload")
+
+            preview_files = {
+                "file": (
+                    uploaded_backtest_file.name,
+                    uploaded_bytes,
+                    "application/octet-stream",
+                )
+            }
+
+            if analyze_clicked:
                 preview_response = run_backend("/backtest/upload/preview", method="POST", files=preview_files)
                 if preview_response and preview_response.status_code == 200:
                     st.session_state["backtest_upload_preview"] = preview_response.json().get("data", {})
@@ -879,6 +983,7 @@ with tab3:
 
                 columns = preview_payload.get("columns", [])
                 select_options = ["<None>"] + columns
+                suggested_mapping = {}
 
                 def default_index_for(candidates):
                     for candidate in candidates:
@@ -887,34 +992,56 @@ with tab3:
                                 return idx + 1
                     return 0
 
-                st.info("Raw-only mode: upload booking-level data. System will aggregate snapshots automatically.")
-                st.markdown("### Raw Column Mapping")
+                def suggested_or_heuristic(field_key, fallback_candidates):
+                    suggested = suggested_mapping.get(field_key)
+                    if isinstance(suggested, str) and suggested in columns:
+                        return select_options.index(suggested)
+                    return default_index_for(fallback_candidates)
+
+                st.markdown("### Required Field Pairing")
+
+                required_field_rows = mapping_requirements.get("required_fields", [])
+                if required_field_rows:
+                    status_rows = []
+                    for item in required_field_rows:
+                        status_rows.append(
+                            {
+                                "field": item.get("label", item.get("key")),
+                                "required": bool(item.get("required", False)),
+                                "description": item.get("description", ""),
+                            }
+                        )
+                    st.dataframe(pd.DataFrame(status_rows), use_container_width=True)
+
                 map_col1, map_col2 = st.columns(2)
 
                 with map_col1:
                     stay_date_col = st.selectbox(
                         "Stay Date (required)",
                         options=select_options,
-                        index=default_index_for(["stay_date", "stay date", "checkin", "check_in"]),
+                        index=suggested_or_heuristic("stay_date_col", ["stay_date", "stay date", "checkin", "arrival"]),
                     )
                     booking_date_col = st.selectbox(
                         "Booking Date (required)",
                         options=select_options,
-                        index=default_index_for(["booking_date", "booking date", "booked_at", "created_at"]),
+                        index=suggested_or_heuristic("booking_date_col", ["booking_date", "booked", "snapshot"]),
                     )
 
                 with map_col2:
-                    rooms_per_row_col = st.selectbox(
-                        "Rooms Per Row (optional)",
+                    booking_id_col = st.selectbox(
+                        "Booking ID (optional)",
                         options=select_options,
-                        index=default_index_for(["rooms_booked", "rooms", "room_count", "qty", "quantity"]),
-                        help="Leave empty if each row means one room booking",
+                        index=suggested_or_heuristic("booking_id_col", ["booking_id", "reservation", "confirmation", "ref"]),
                     )
+
+                format_col1, format_col2 = st.columns(2)
+                with format_col1:
                     stay_date_format = st.text_input(
                         "Stay Date Format (optional)",
                         value="",
                         placeholder="e.g., %d%m%Y or %Y-%m-%d",
                     )
+                with format_col2:
                     booking_date_format = st.text_input(
                         "Booking Date Format (optional)",
                         value="",
@@ -922,15 +1049,54 @@ with tab3:
                     )
 
                 mapping = {
-                    "raw_data_mode": True,
+                    "booking_id_col": None if booking_id_col == "<None>" else booking_id_col,
                     "stay_date_col": None if stay_date_col == "<None>" else stay_date_col,
                     "booking_date_col": None if booking_date_col == "<None>" else booking_date_col,
-                    "rooms_per_row_col": None if rooms_per_row_col == "<None>" else rooms_per_row_col,
                     "stay_date_format": stay_date_format.strip() or None,
                     "booking_date_format": booking_date_format.strip() or None,
                 }
 
-                if st.button("🚀 Run Uploaded Backtest", type="primary", use_container_width=True):
+                uploaded_retrain_label = st.text_input(
+                    "Uploaded retrain label (optional)",
+                    value="",
+                    placeholder="e.g., My property dataset Mar 2026",
+                    key="uploaded_retrain_label",
+                )
+
+                retrain_col1, retrain_col2 = st.columns(2)
+
+                with retrain_col1:
+                    if st.button("🧠 Retrain & Activate From Upload", type="secondary", use_container_width=True):
+                        retrain_payload = {
+                            "mapping_json": json.dumps(mapping),
+                            "total_rooms_available": str(base_payload["total_rooms_available"]),
+                            "label": uploaded_retrain_label.strip(),
+                            "activate": "true",
+                        }
+                        retrain_files = {
+                            "file": (
+                                uploaded_backtest_file.name,
+                                uploaded_bytes,
+                                "application/octet-stream",
+                            )
+                        }
+
+                        with st.spinner("Retraining completion ratios from uploaded data..."):
+                            retrain_upload_response = run_backend(
+                                "/model/retrain/upload",
+                                method="POST",
+                                data=retrain_payload,
+                                files=retrain_files,
+                            )
+
+                        if retrain_upload_response and retrain_upload_response.status_code == 200:
+                            st.success("✅ Uploaded dataset retrained and activated for all forecasts.")
+                            st.rerun()
+
+                with retrain_col2:
+                    run_uploaded_backtest = st.button("🚀 Run Uploaded Backtest", type="primary", use_container_width=True)
+
+                if run_uploaded_backtest:
                     upload_run_payload = {
                         "mapping_json": json.dumps(mapping),
                         "total_rooms_available": str(base_payload["total_rooms_available"]),
@@ -960,6 +1126,18 @@ with tab3:
 
                     if upload_run_response and upload_run_response.status_code == 200:
                         render_backtest_result(upload_run_response.json().get("data", {}))
+
+    with st.expander("📘 How to read these metrics", expanded=False):
+        st.markdown(
+            """
+            - **Rows Evaluated**: Number of historical prediction points tested.
+            - **MAE**: Average absolute error in occupancy points. Lower is better.
+            - **RMSE**: Penalizes large misses more than MAE. If RMSE is much higher than MAE, there are outliers.
+            - **MAPE (%)**: Average percentage error relative to actual occupancy. Lower is better.
+            - **Within ±5%**: Share of predictions with absolute error ≤ 5 occupancy points. Higher is better.
+            - **Bias**: Average signed error (`predicted - actual`). Positive means over-forecasting; negative means under-forecasting.
+            """
+        )
 
 # ============================================================================
 # SIDEBAR

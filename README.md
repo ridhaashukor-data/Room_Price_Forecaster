@@ -38,8 +38,20 @@ Run historical forecast evaluation and review:
 - Accuracy bands (within ±3, ±5, ±10 occupancy points)
 - Breakdown by day type and days-out
 - Optional detailed row-level actual vs predicted output
-- Support for user-uploaded raw booking CSV/XLSX data with column mapping and auto-aggregation
-- Downloadable sample upload template for custom data onboarding
+- Support for user-uploaded raw booking CSV/XLSX data with manual column mapping
+- Downloadable sample upload template (booking_id, stay_date, booking_date)
+- Retrain completion-ratio datasets from built-in or uploaded data and set active dataset
+
+### 5) Active Forecast Dataset Selection
+- You can switch which completion-ratio dataset is active from the Backtesting tab.
+- The active dataset is used by **Single-Day Forecast**, **Bulk Forecast**, and **Backtesting** calculations until changed again.
+- The last active dataset is persisted and restored on API restart.
+
+### 6) Uploaded Dataset Pairing (Backtesting Upload)
+- Upload your own raw booking dataset.
+- Follow the download template format before upload.
+- Map stay_date and booking_date fields before running.
+- booking_id is optional and used only for reference.
 
 ---
 
@@ -165,6 +177,16 @@ Bulk history:
 - `GET /bulk/download/{record_id}`
 - `DELETE /bulk/history/{record_id}`
 - `DELETE /bulk/history?older_than_days=30&limit=500`
+
+---
+
+## 📤 Upload Limits & File Types
+
+- Max upload size: **50 MB** per request
+- `POST /bulk/upload`: `.xlsx`, `.xls`
+- `POST /backtest/upload/preview`: `.csv`, `.xlsx`, `.xls`
+- `POST /backtest/upload/run`: `.csv`, `.xlsx`, `.xls`
+- Invalid file type returns `400`; oversized uploads return `413`
 
 ---
 

@@ -6,7 +6,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from forecaster import forecast_occupancy, load_completion_ratios
+from forecaster import forecast_occupancy, load_completion_ratios, build_completion_ratio_lookup
 
 
 DEFAULT_BACKTEST_DATA_PATH = os.path.join(
@@ -131,22 +131,19 @@ def generate_uploaded_backtest_template_csv() -> tuple[bytes, str, str]:
     template_df = pd.DataFrame(
         [
             {
-                "booking_id": 1,
+                "booking_id": "BK-1001",
                 "stay_date": "2026-03-20",
                 "booking_date": "2026-02-25",
-                "rooms_booked": 1,
             },
             {
-                "booking_id": 2,
+                "booking_id": "BK-1002",
                 "stay_date": "2026-03-20",
                 "booking_date": "2026-03-01",
-                "rooms_booked": 2,
             },
             {
-                "booking_id": 3,
+                "booking_id": "BK-1003",
                 "stay_date": "2026-03-21",
                 "booking_date": "2026-02-28",
-                "rooms_booked": 1,
             },
         ]
     )
@@ -160,94 +157,65 @@ def prepare_uploaded_backtest_dataset(
     mapping: dict,
     total_rooms_available: int,
 ) -> pd.DataFrame:
-    raw_data_mode = bool(mapping.get("raw_data_mode", False))
+    if total_rooms_available <= 0:
+        raise ValueError("total_rooms_available must be greater than 0")
 
-    if not raw_data_mode:
-        raise ValueError(
-            "Only raw booking data is supported for uploaded backtesting. "
-            "Please provide stay_date + booking_date (and optional rooms_per_row_col)."
-        )
+    def _optional_col(name: str) -> Optional[str]:
+        value = (mapping.get(name) or "").strip() if isinstance(mapping.get(name), str) else mapping.get(name)
+        if not value:
+            return None
+        if value not in source_df.columns:
+            raise ValueError(f"Mapped column not found for {name}: {value}")
+        return value
 
-    if raw_data_mode:
-        stay_date_col = mapping.get("stay_date_col")
-        booking_date_col = mapping.get("booking_date_col")
-        rooms_per_row_col = mapping.get("rooms_per_row_col")
-        stay_date_format = (mapping.get("stay_date_format") or "").strip() or None
-        booking_date_format = (mapping.get("booking_date_format") or "").strip() or None
+    stay_date_col = _optional_col("stay_date_col")
+    booking_date_col = _optional_col("booking_date_col")
 
-        if not stay_date_col:
-            raise ValueError("stay_date_col mapping is required in raw data mode")
-        if not booking_date_col:
-            raise ValueError("booking_date_col mapping is required in raw data mode")
-        if stay_date_col not in source_df.columns:
-            raise ValueError(f"Mapped stay_date_col not found: {stay_date_col}")
-        if booking_date_col not in source_df.columns:
-            raise ValueError(f"Mapped booking_date_col not found: {booking_date_col}")
-        if rooms_per_row_col and rooms_per_row_col not in source_df.columns:
-            raise ValueError(f"Mapped rooms_per_row_col not found: {rooms_per_row_col}")
+    stay_date_format = (mapping.get("stay_date_format") or "").strip() or None
+    booking_date_format = (mapping.get("booking_date_format") or "").strip() or None
 
-        if total_rooms_available <= 0:
-            raise ValueError("total_rooms_available must be greater than 0 in raw data mode")
+    if not stay_date_col:
+        raise ValueError("stay_date_col mapping is required")
 
-        df = source_df.copy()
-        df["stay_date_dt"] = _parse_datetime_series(df[stay_date_col], stay_date_format)
-        df["booking_date_dt"] = _parse_datetime_series(df[booking_date_col], booking_date_format)
+    if not booking_date_col:
+        raise ValueError("booking_date_col mapping is required")
 
-        if rooms_per_row_col:
-            df["rooms_units"] = pd.to_numeric(df[rooms_per_row_col], errors="coerce")
-        else:
-            df["rooms_units"] = 1.0
+    df = source_df.copy()
+    df["stay_date_dt"] = _parse_datetime_series(df[stay_date_col], stay_date_format)
+    df["booking_date_dt"] = _parse_datetime_series(df[booking_date_col], booking_date_format)
+    df = df.dropna(subset=["stay_date_dt", "booking_date_dt"])
+    df = df[df["booking_date_dt"] <= df["stay_date_dt"]]
 
-        df = df.dropna(subset=["stay_date_dt", "booking_date_dt", "rooms_units"])
-        df = df[df["rooms_units"] > 0]
-        df = df[df["booking_date_dt"] <= df["stay_date_dt"]]
+    if df.empty:
+        raise ValueError("No usable rows found after parsing stay_date and booking_date")
 
-        if df.empty:
-            raise ValueError("No valid rows found after raw data cleaning")
+    booking_counts = (
+        df.groupby(["stay_date_dt", "booking_date_dt"], as_index=False)
+        .size()
+        .rename(columns={"size": "rooms_booked"})
+        .sort_values(["stay_date_dt", "booking_date_dt"])
+    )
 
-        aggregated_rows: list[dict] = []
-        for stay_date_dt, stay_group in df.groupby("stay_date_dt"):
-            final_rooms = float(stay_group["rooms_units"].sum())
-            final_occupancy = final_rooms / float(total_rooms_available) * 100.0
+    booking_counts["cum_rooms"] = booking_counts.groupby("stay_date_dt")["rooms_booked"].cumsum()
+    final_rooms_by_stay = booking_counts.groupby("stay_date_dt")["rooms_booked"].sum()
 
-            bookings_by_date = (
-                stay_group.groupby("booking_date_dt", as_index=False)["rooms_units"]
-                .sum()
-                .sort_values("booking_date_dt")
-            )
-            bookings_by_date["cum_rooms"] = bookings_by_date["rooms_units"].cumsum()
+    booking_counts["days_out"] = (booking_counts["stay_date_dt"] - booking_counts["booking_date_dt"]).dt.days
+    booking_counts["current_occupancy"] = booking_counts["cum_rooms"] / float(total_rooms_available) * 100.0
+    booking_counts["final_occupancy"] = booking_counts["stay_date_dt"].map(final_rooms_by_stay) / float(total_rooms_available) * 100.0
+    booking_counts["day_type"] = booking_counts["stay_date_dt"].apply(
+        lambda value: "weekday" if value.weekday() <= 3 else "weekend"
+    )
 
-            for entry in bookings_by_date.itertuples(index=False):
-                snapshot_dt = getattr(entry, "booking_date_dt")
-                days_out = int((stay_date_dt - snapshot_dt).days)
-                if days_out < 0 or days_out > 30:
-                    continue
+    prepared_df = booking_counts[["stay_date_dt", "days_out", "current_occupancy", "final_occupancy", "day_type"]].copy()
+    prepared_df = prepared_df[(prepared_df["days_out"] >= 0) & (prepared_df["days_out"] <= 30)]
+    prepared_df = prepared_df[(prepared_df["current_occupancy"] >= 0) & (prepared_df["current_occupancy"] <= 100)]
+    prepared_df = prepared_df[(prepared_df["final_occupancy"] >= 0) & (prepared_df["final_occupancy"] <= 100)]
 
-                current_rooms = float(getattr(entry, "cum_rooms"))
-                current_occupancy = current_rooms / float(total_rooms_available) * 100.0
+    if prepared_df.empty:
+        raise ValueError("No usable rows after applying mapped fields and derivations")
 
-                aggregated_rows.append(
-                    {
-                        "stay_date_dt": stay_date_dt,
-                        "days_out": days_out,
-                        "current_occupancy": current_occupancy,
-                        "final_occupancy": final_occupancy,
-                        "day_type": "weekday" if stay_date_dt.weekday() <= 3 else "weekend",
-                    }
-                )
-
-        aggregated_df = pd.DataFrame(aggregated_rows)
-        if aggregated_df.empty:
-            raise ValueError("No usable snapshot rows were generated from raw data (days_out must be 0-30)")
-
-        aggregated_df["days_out"] = pd.to_numeric(aggregated_df["days_out"], errors="coerce").astype("Int64")
-        aggregated_df = aggregated_df.dropna(subset=["stay_date_dt", "days_out", "current_occupancy", "final_occupancy"])
-        aggregated_df = aggregated_df[(aggregated_df["current_occupancy"] >= 0) & (aggregated_df["current_occupancy"] <= 100)]
-        aggregated_df = aggregated_df[(aggregated_df["final_occupancy"] >= 0) & (aggregated_df["final_occupancy"] <= 100)]
-
-        return aggregated_df[["stay_date_dt", "days_out", "current_occupancy", "final_occupancy", "day_type"]]
-
-    raise ValueError("Invalid mapping configuration for uploaded data")
+    prepared_df["days_out"] = prepared_df["days_out"].astype(int)
+    return prepared_df[["stay_date_dt", "days_out", "current_occupancy", "final_occupancy", "day_type"]]
 
 
 def load_backtest_dataset(csv_path: Optional[str] = None) -> pd.DataFrame:
@@ -346,6 +314,7 @@ def _run_backtest_on_prepared_df(
         }
 
     ratios_df = completion_ratios_df if completion_ratios_df is not None else load_completion_ratios()
+    ratio_lookup = build_completion_ratio_lookup(ratios_df)
 
     detail_rows: list[dict] = []
     skipped_rows = 0
@@ -368,7 +337,7 @@ def _run_backtest_on_prepared_df(
         }
 
         try:
-            forecast_result = forecast_occupancy(model_input, ratios_df)
+            forecast_result = forecast_occupancy(model_input, ratios_df, ratio_lookup=ratio_lookup)
             predicted_occ = float(forecast_result["forecast_occupancy_pct"])
         except Exception:
             skipped_rows += 1
@@ -479,10 +448,9 @@ def run_backtest_uploaded(
     detail_limit: int = 500,
 ) -> dict:
     uploaded_df = load_uploaded_dataframe(file_bytes=file_bytes, filename=filename)
-    mapping_payload = {**mapping, "raw_data_mode": True}
     prepared_df = prepare_uploaded_backtest_dataset(
         source_df=uploaded_df,
-        mapping=mapping_payload,
+        mapping=mapping,
         total_rooms_available=total_rooms_available,
     )
 
