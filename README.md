@@ -17,6 +17,7 @@ Given current occupancy for a stay date (up to 30 days out), the system returns:
 - Occupancy confidence metadata
 - ADR recommendation and adjustment details
 - Demand signal + warnings
+<img width="119" height="75" alt="image" src="https://github.com/user-attachments/assets/b5dbf559-ec65-4001-af75-e413ab4e5176" />
 
 ### 2) Bulk Forecast (Excel)
 You can:
