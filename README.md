@@ -17,6 +17,9 @@ Given current occupancy for a stay date (up to 30 days out), the system returns:
 - Occupancy confidence metadata
 - ADR recommendation and adjustment details
 - Demand signal + warnings
+- Input <img width="1531" height="929" alt="Single day input whole" src="https://github.com/user-attachments/assets/6147532d-b87d-43ae-b15e-287301a21643" />
+- Output <img width="1183" height="925" alt="image" src="https://github.com/user-attachments/assets/091ebf33-2c2f-49eb-9549-9ad04e2a4ee1" />
+
 
 ### 2) Bulk Forecast (Excel)
 You can:
@@ -24,13 +27,17 @@ You can:
 - Fill occupancy values
 - Upload it for forecasting
 - Download output with current + forecast occupancy grid and conditional formatting
+- Input <img width="665" height="775" alt="Bulk forecast input eg" src="https://github.com/user-attachments/assets/e8a4547b-ff87-4977-88b2-b07583a0d35a" />
+- Output <img width="528" height="790" alt="Bulk forecast output eg" src="https://github.com/user-attachments/assets/c2954bcb-b925-429b-9384-8b438575e4ab" />
 
-### 3) History (Optional, requires MongoDB)
+
+### 3) History (MongoDB)
 If MongoDB is connected, the system stores:
 - Single-day forecast history
 - Bulk output files (latest records retained)
+- If MongoDB is not configured, forecasting still works; history endpoints return unavailable/offline messages.
+- <img width="1183" height="925" alt="Single history" src="https://github.com/user-attachments/assets/b63a8705-d292-4421-8683-1ebae1a36bb9" />
 
-If MongoDB is not configured, forecasting still works; history endpoints return unavailable/offline messages.
 
 ### 4) Backtesting (MVP)
 Run historical forecast evaluation and review:
@@ -41,6 +48,11 @@ Run historical forecast evaluation and review:
 - Support for user-uploaded raw booking CSV/XLSX data with manual column mapping
 - Downloadable sample upload template (booking_id, stay_date, booking_date)
 - Retrain completion-ratio datasets from built-in or uploaded data and set active dataset
+- MAE (Mean Absolute Error) is the average size of forecasting error. It means the prediction is off by an average of X.XX percentage points. Lower is better.
+- RMSE (Root Mean Squared Error) also measure error size, but it penalize large error heavily. Lower is better.
+- MAPE (Mean Absolute Percentage Error) measure the deviation from true OCC. Lower is better.
+- Backtest result for built-in data <img width="1353" height="173" alt="Backtest result for built in data" src="https://github.com/user-attachments/assets/8629cd48-45e4-4b37-a82e-ad82dc103a6f" />
+
 
 ### 5) Active Forecast Dataset Selection
 - You can switch which completion-ratio dataset is active from the Backtesting tab.
@@ -51,7 +63,9 @@ Run historical forecast evaluation and review:
 - Upload your own raw booking dataset.
 - Follow the download template format before upload.
 - Map stay_date and booking_date fields before running.
-- booking_id is optional and used only for reference.
+- Dataset used can be changed to user data, which will affect calculation in the whole app.
+- Data required for training <img width="259" height="102" alt="Data required for training" src="https://github.com/user-attachments/assets/5b2e35f4-5628-46fd-86c0-7ba6f1111be9" />
+
 
 ---
 
