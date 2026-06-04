@@ -26,6 +26,7 @@ You can:
 - Upload it for forecasting
 - Download output with current + forecast occupancy grid and conditional formatting
 
+
 ### 3) History (Optional, requires MongoDB)
 If MongoDB is connected, the system stores:
 - Single-day forecast history
