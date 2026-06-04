@@ -11,9 +11,9 @@ This is probably the most directly useful feature for a revenue manager. It give
 - makes it easier to decide whether to push rate, hold rate, or stimulate demand
 - can help avoid pricing too low on dates that are likely to fill
 - can also help spot weak dates earlier
-- Input <img width="1504" height="564" alt="Single day input 2" src="https://github.com/user-attachments/assets/42113a74-fbc8-4f20-bee4-6892d2c5f0a1" />
+- input <img width="1531" height="929" alt="Single day input whole" src="https://github.com/user-attachments/assets/0a11785e-f024-4c5f-9507-b5bbcedbfb42" />
 
-- Output <img width="1317" height="614" alt="Single day output" src="https://github.com/user-attachments/assets/31654fd6-b40d-45ec-b28b-b10355c709a5" />
+- output <img width="1317" height="614" alt="Single day output" src="https://github.com/user-attachments/assets/31654fd6-b40d-45ec-b28b-b10355c709a5" />
 
 
 ### 2. Bulk forecast
@@ -23,6 +23,13 @@ The Excel upload is useful when looking at multiple stay dates at once instead o
 - gives a quicker view of the next few weeks
 - helps spot strong dates and soft dates faster
 - saves time compared with doing everything manually in spreadsheets
+- input template
+<img width="1854" height="770" alt="Bulk forecast input template" src="https://github.com/user-attachments/assets/64816024-3fdd-4988-81c4-64d236e75567" />
+
+
+- output
+<img width="528" height="790" alt="Bulk forecast output eg" src="https://github.com/user-attachments/assets/885053b7-5025-4b38-92e7-8441111c008e" />
+
 
 ### 3. Backtesting
 This is important because it shows how accurate the forecast has been against historical results.
@@ -31,6 +38,14 @@ This is important because it shows how accurate the forecast has been against hi
 - gives more confidence in using the tool
 - shows where the forecast performs well and where it doesn’t
 - makes it easier to improve forecasting over time instead of just guessing
+- Backtest result for built-in data
+<img width="1353" height="173" alt="Backtest result for built in data" src="https://github.com/user-attachments/assets/735d56a3-4c94-447d-8b71-a563d0fa4e72" />
+
+
+- MAE (Mean Absolute Error) is the average size of forecasting error. It means the prediction is off by an average of X.XX percentage points. Lower is better.
+- RMSE (Root Mean Squared Error) also measure error size, but it penalize large error heavily. Lower is better.
+- MAPE (Mean Absolute Percentage Error) measure the deviation from true OCC. Lower is better.
+
 
 ### 4. Retraining / active dataset selection
 The app can use built-in data or uploaded booking data, and the active dataset can be changed.
@@ -59,4 +74,4 @@ Used in the right way, the app can help with:
 - less manual spreadsheet work
 - better balance between occupancy and ADR
 
-Overall, it feels most useful as a **practical support tool** for daily or weekly revenue decisions, rather than something that replaces the revenue manager.
+This tool is best seen as a support system for revenue managers, especially for short-term decision-making. Its value is in giving a clearer view of where occupancy is likely to go and helping teams react earlier.
