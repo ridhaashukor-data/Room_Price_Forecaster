@@ -63,7 +63,7 @@ There are also some clear limitations.
 - It’s **not a full revenue management system**. It doesn’t include market pricing, competitor rate shopping, or full automation.
 - The **bulk forecast is more occupancy-focused**, so it’s not doing full pricing recommendations across every row in the same way a full RMS might.
 - The output is only as good as the data behind it. If the active dataset is old or not representative, the forecast may be less useful.
-- It still needs human judgment, especially around unusual events, holidays, or sudden market changes.
+- It still needs human judgment, especially around unusual events, holidays, or sudden market changes. 
 
 ## Overall business value
 
