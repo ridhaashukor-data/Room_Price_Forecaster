@@ -11,6 +11,10 @@ This is probably the most directly useful feature for a revenue manager. It give
 - makes it easier to decide whether to push rate, hold rate, or stimulate demand
 - can help avoid pricing too low on dates that are likely to fill
 - can also help spot weak dates earlier
+- Input <img width="1504" height="564" alt="Single day input 2" src="https://github.com/user-attachments/assets/42113a74-fbc8-4f20-bee4-6892d2c5f0a1" />
+
+- Output <img width="1317" height="614" alt="Single day output" src="https://github.com/user-attachments/assets/31654fd6-b40d-45ec-b28b-b10355c709a5" />
+
 
 ### 2. Bulk forecast
 The Excel upload is useful when looking at multiple stay dates at once instead of checking them one by one.
