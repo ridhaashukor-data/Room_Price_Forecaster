@@ -1,6 +1,6 @@
 # How a Simple Forecasting Tool Can Support Hotel Revenue Strategy
 
-This app is mainly useful as a **short-term forecasting tool** for revenue management. It helps estimate where occupancy is likely to end up for stay dates in the next 30 days, which can support better pricing and demand decisions. This project was built from my own product and business requirements. I defined the use case, workflow, and functional expectations, while the code itself was by AI under my direction and iteration.
+This app is mainly useful as a **short-term forecasting tool** for revenue management. It helps estimate where occupancy is likely to end up for stay dates in the next 30 days, which can support better pricing and demand decisions. This project was built from my own product and business requirements. I defined the use case, workflow, and functional expectations, while the code itself was written by AI under my direction and iteration.
 
 ## Main features that matter most
 
